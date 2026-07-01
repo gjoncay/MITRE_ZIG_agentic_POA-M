@@ -1,0 +1,71 @@
+===========================================================
+MITRE CONSOLIDATED DATASET: USAGE & INTEGRATION GUIDE
+===========================================================
+
+This guide explains how to use the generated nodes.csv, edges.csv, and ontology.json files.
+
+-----------------------------------------------------------
+1. IMPORTING INTO PALANTIR (FOUNDRY / GOTHAM)
+-----------------------------------------------------------
+Palantir's Ontology system is built natively for property graphs, making your generated CSV files the perfect format.
+
+Step 1: Upload the Datasets
+- In Foundry, upload both `nodes.csv` and `edges.csv` into your Foundry filesystem as raw datasets.
+- Sync these datasets into the Foundry Ontology Manager.
+
+Step 2: Define the Object Type
+- Create a new Object Type called "MITRE Entity" (or separate them out if you prefer, but a single entity object is easiest for pivoting).
+- Use `nodes.csv` as the backing dataset.
+- Set the `id` column as the Primary Key.
+- Map the `type`, `name`, `description`, and `url` columns to standard properties.
+
+Step 3: Define the Link Type
+- In the Ontology Manager, create a new Link Type.
+- Use `edges.csv` as a Many-to-Many join table.
+- Point the "Source Object" to the "MITRE Entity" Object Type, joining on `source_id` -> `id`.
+- Point the "Target Object" to the "MITRE Entity" Object Type, joining on `target_id` -> `id`.
+
+Result: You can now use Palantir Vertex, Object Explorer, or Quiver to visually pivot from a D3FEND tactic down to an ATT&CK technique and its associated offensive artifacts!
+
+-----------------------------------------------------------
+2. USING THE DATA OUTSIDE OF PALANTIR
+-----------------------------------------------------------
+If you don't use Palantir, this property graph format is industry-standard and can be used in many other ways.
+
+A. Graph Databases (e.g., Neo4j, Amazon Neptune)
+- You can import `nodes.csv` and `edges.csv` directly into Neo4j using the Neo4j Admin Import tool or the `LOAD CSV` Cypher command.
+- Once imported, you can run powerful graph queries. For example, finding the shortest path between an offensive artifact and a D3FEND technique.
+
+B. Custom Web Dashboards (React, Vue, etc.)
+- Use the `ontology.json` file. Since it's a standard JSON format, you can fetch it directly via an API or bundle it with your frontend app.
+- You can visualize the nodes and edges using popular JavaScript libraries like:
+  * Cytoscape.js
+  * D3.js
+  * Vis.js
+- This allows you to build a custom visual pivot tool without needing a heavy backend.
+
+C. Python / Data Science (Jupyter, Pandas, NetworkX)
+- You can load this graph directly into Python for security research.
+```python
+import pandas as pd
+import networkx as nx
+
+# Load the edges
+edges_df = pd.read_csv('edges.csv')
+
+# Create a directed graph
+G = nx.from_pandas_edgelist(
+    edges_df, 
+    source='source_id', 
+    target='target_id', 
+    edge_attr='relationship_type', 
+    create_using=nx.DiGraph()
+)
+
+# Find how many artifacts a specific technique is linked to
+print(len(list(G.neighbors('T1548'))))
+```
+
+D. Standard BI Tools (Tableau, PowerBI)
+- You can load the CSV files into a standard relational BI tool. 
+- You would load `nodes.csv` twice (once as "Source Node", once as "Target Node") and join them both to `edges.csv` on the `id` column to create a standard relational pivot table.
