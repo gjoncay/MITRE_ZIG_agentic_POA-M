@@ -253,6 +253,98 @@ Create `assessment_template.md`. This forces the Agent to output structured form
 
 ---
 
+## 5. Bonus: Assessment Ingestion Engine
+To process massive, multi-tab Excel reports from disparate red/blue teams (which have wildly varying schemas), create `scripts/ingest_assessment.py`. This script extracts all rows across all tabs, stringifies them regardless of column names, and converts the findings into their own vector embeddings so an agent can semantically search the raw data!
+
+```python
+import sys
+import os
+import json
+import argparse
+import pandas as pd
+
+try:
+    import numpy as np
+    from sentence_transformers import SentenceTransformer
+    SEMANTIC_ENABLED = True
+except ImportError:
+    SEMANTIC_ENABLED = False
+    print("Warning: Machine Learning libraries (sentence-transformers, numpy) not found. Will only output flattened CSV.")
+
+def ingest_file(filepath):
+    print(f"Ingesting {filepath}...")
+    
+    if filepath.endswith('.xlsx') or filepath.endswith('.xls'):
+        sheets = pd.read_excel(filepath, sheet_name=None, header=None)
+    elif filepath.endswith('.csv'):
+        sheets = {"Sheet1": pd.read_csv(filepath, header=None)}
+    else:
+        print("Unsupported file format. Please provide a .csv or .xlsx file.")
+        sys.exit(1)
+        
+    all_findings = []
+    
+    for sheet_name, raw_df in sheets.items():
+        max_non_nulls = 0
+        header_idx = 0
+        
+        for idx, row in raw_df.head(50).iterrows():
+            non_null_count = row.notna().sum()
+            if non_null_count > max_non_nulls:
+                max_non_nulls = non_null_count
+                header_idx = idx
+                
+        if max_non_nulls == 0: continue
+            
+        header_row = raw_df.iloc[header_idx].astype(str)
+        header_row = [str(val) if str(val) != 'nan' else f"Unnamed_{i}" for i, val in enumerate(header_row)]
+        
+        df = raw_df.iloc[header_idx + 1:].copy()
+        df.columns = header_row
+        df = df.dropna(how='all')
+        
+        for idx, row in df.iterrows():
+            finding_text_parts = []
+            row_data = {"_sheet": sheet_name}
+            
+            for col_name, value in row.items():
+                if pd.notna(value) and str(value).strip() != "" and str(value).strip() != "nan":
+                    finding_text_parts.append(f"{col_name}: {str(value).strip()}")
+                    row_data[str(col_name)] = str(value).strip()
+            
+            if finding_text_parts:
+                full_text = " | ".join(finding_text_parts)
+                row_data["_semantic_text"] = full_text
+                all_findings.append(row_data)
+                
+    if not all_findings:
+        print("No data found to process.")
+        return
+        
+    flattened_df = pd.DataFrame(all_findings)
+    csv_out = flattened_df.drop(columns=['_semantic_text'])
+    csv_path = "processed_assessment.csv"
+    csv_out.to_csv(csv_path, index=False)
+    
+    if SEMANTIC_ENABLED:
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        texts_to_embed = flattened_df['_semantic_text'].tolist()
+        embeddings = model.encode(texts_to_embed, show_progress_bar=True)
+        np.savez("assessment_embeddings.npz", embeddings=embeddings)
+        with open("assessment_metadata.json", 'w', encoding='utf-8') as f:
+            json.dump({"findings": texts_to_embed}, f)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Ingest and optionally embed assessment reports (Excel/CSV)")
+    parser.add_argument("filepath", help="Path to the .xlsx or .csv file")
+    args = parser.parse_args()
+    ingest_file(args.filepath)
+```
+
+**Execution:** Run `python scripts/ingest_assessment.py <path_to_report.xlsx>` to process a report.
+
+---
+
 ## 6. Workflow: From Threat Intel to Remediation Plan (For the End-User & Agent)
 Once this repository is reconstructed on the high side, here is how an LLM Agent (like Claude) should be prompted to use it:
 
