@@ -141,12 +141,12 @@ for _, row in df_full_map.iterrows():
                 if pd.notna(off_tech_id):
                     add_edge(oa_id, off_tech_id, off_artifact_rel if pd.notna(off_artifact_rel) else 'used_by')
 
-print("Exporting to nodes.csv and edges.csv...")
+print("Exporting to mitre_nodes.csv and mitre_edges.csv...")
 df_nodes = pd.DataFrame(list(nodes.values()))
-df_nodes.to_csv('nodes.csv', index=False)
+df_nodes.to_csv('mitre_nodes.csv', index=False)
 
 df_edges = pd.DataFrame(list(edges), columns=['source_id', 'target_id', 'relationship_type'])
-df_edges.to_csv('edges.csv', index=False)
+df_edges.to_csv('mitre_edges.csv', index=False)
 
 print("Exporting to ontology.json...")
 ontology = {

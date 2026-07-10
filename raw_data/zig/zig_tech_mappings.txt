@@ -1,0 +1,351 @@
+Anomaly Detection	
+4.4P45.1P5
+	2
+API Gateway and Management solutions	
+5.1P5
+	1
+API Integration Frameworks	
+5.1P5
+	1
+API Management solutions	
+6.6P6
+	1
+Application Portfolio Management (APM)	
+3.1P3
+	1
+Application Security Testing Orchestration (ASTO)	
+3.2P3
+	1
+Artificial Intelligence (AI)/Machine Learning (ML)-Based Tagging and User Behavior Analysis	
+6.3P67.4P7
+	2
+Asset Management solutions	
+3.1P3
+	3
+Asset/Device/Endpoint Management solutions	
+2.1P22.6P2
+	2
+Attribute-Based Access Control (ABAC)	
+1.2P11.5P11.7P13.4P34.7P46.1P6
+	6
+Audit and Logging	
+1.6P11.7P11.8P1
+	3
+Automated Provisioning/Deprovisioning	
+1.5P1
+	1
+Automation Frameworks and Libraries	
+6.2P6
+	1
+Automation Orchestration solutions	
+6.2P6
+	1
+Behavioral Analytics solutions	
+4.4P45.1P56.3P6
+	3
+Cloud Access Security Broker (CASB)	
+2.2P22.4P2
+	2
+Cloud Security Platforms	
+1.7P1
+	1
+Cloud Security Posture Management (CSPM)	
+2.2P2
+	1
+Code Signing	
+3.2P3
+	1
+Compliance Management solutions	
+4.1P4
+	1
+Compliance and Governance Automation solutions	
+4.1P4
+	1
+Comply-to-Connect (C2C)	
+2.2P2
+	1
+Configuration Management Database (CMDB)	
+2.1P22.5P23.1P3
+	3
+Container Security Scanning	
+3.3P3
+	1
+Containerization and Orchestration Tools	
+3.2P3
+	1
+Content Inspection solutions	
+4.3P4
+	1
+Context-Aware Access Control	
+4.7P4
+	1
+Continuous Integration (CI)/Continuous Delivery (CD) Pipelines	
+6.2P6
+	1
+Cyber Threat Intelligence (CTI) ingestion from multiple approved sources	
+6.6P6
+	1
+Cyber Threat Modeling	
+6.3P6
+	1
+Data Analytics and Visualization solutions	
+7.3P7
+	1
+Data Classification, Discovery, Labeling solutions	
+4.3P4
+	1
+Data Encryption	
+4.5P4
+	1
+Data Integration and Extract, Transform, Load (ETL)	
+6.6P6
+	1
+Data Lifecycle Management	
+4.2P4
+	1
+Data Loss Prevention (DLP)	
+1.4P14.4P44.6P4
+	3
+Data Management and Integration	
+4.1P4
+	1
+Data Standardization	
+4.2P44.3P46.3P6
+	3
+Data Tagging and Protection	
+4.3P44.6P4
+	2
+Device Health Monitoring	
+2.2P22.6P2
+	2
+Digital Rights Management (DRM)	
+4.4P44.5P44.7P4
+	3
+Disaster Recovery and Business Continuity solutions	
+6.2P6
+	1
+Dynamic Application Security Testing (DAST)	
+3.2P33.3P3
+	1
+Encryption and Key Management solutions	
+1.3P11.4P14.5P4
+	3
+Endpoint Detection and Response (EDR)	
+1.6P11.8P12.4P22.7P26.5P6
+	5
+Endpoint Protection Platform (EPP)	
+6.7P6
+	1
+Endpoint Security solutions	
+1.6P1
+	1
+Enterprise Mobility Management	
+2.4P22.6P2
+	2
+Extended Detection and Response (XDR)	
+2.7P26.5P6
+	2
+File Integrity Monitoring (FIM)	
+2.3P24.4P44.6P4
+	3
+Firewall as a Service (FWaaS)	
+5.4P5
+	1
+Git Security and Governance	
+3.3P3
+	1
+Governance, Risk, and Compliance (GRC)	
+4.1P44.2P47.2P77.3P77.5P7
+	6
+Identity Governance and Administration (IGA)	
+1.5P1
+	1
+Identity Management (IdM)	
+1.1P1
+	1
+Identity Provider (IdP)	
+1.1P11.3P11.9P1
+	3
+Identity and Access Management (IAM)	
+6.1P67.4P7
+	2
+Identity as a Service (IDaaS)	
+1.2P11.3P11.9P1
+	3
+Identity-Based Access Control (IBAC)	
+6.1P6
+	1
+Identity, Credential, and Access Management (ICAM)	
+1.1P11.2P11.4P11.9P13.4P3
+	5
+Incident Response (IR)	
+4.6P4
+	1
+Indicators of Compromise (IoC)	
+6.7P6
+	1
+Infrastructure as Code (IaC) Configuration Management/Security Monitoring and Auditing	
+3.2P3
+	1
+Internet Protocol Security (IPsec)	
+5.2P5
+	1
+Internet of Things (IoT) Discovery	
+2.1P2
+	1
+Interoperability Standards and Protocols	
+6.6P6
+	1
+Interoperability and Data Exchange Frameworks	
+4.2P4
+	1
+Intrusion Detection Systems (IDS)/Intrusion Prevention Systems (IPS)	
+2.7P25.3P57.1P77.5P7
+	5
+Inventory and Asset Management solutions	
+2.1P2
+	1
+IT Asset Management (ITAM) Software	
+2.1P22.5P2
+	1
+Just Enough Access (JEA)	
+1.4P1
+	1
+Just-in-Time (JIT) Access	
+1.4P11.7P11.8P14.7P4
+	4
+Log Management solutions	
+7.1P7
+	1
+Macro-Segmentation	
+5.2P55.3P5
+	2
+Managed Detection and Response (MDR)	
+2.7P26.2P67.2P77.3P77.5P7
+	6
+Metadata Management solutions	
+4.1P44.3P4
+	2
+Micro-Segmentation	
+5.2P55.3P55.4P5
+	3
+Microservices APIs	
+6.6P6
+	1
+Mobile Device Management (MDM)	
+2.4P22.6P2
+	2
+Monitoring and Analytics solutions	
+4.4P45.1P5
+	2
+Monitoring and Auditing solutions	
+7.1P7
+	1
+Multi-Factor Authentication (MFA)	
+1.3P11.8P11.9P12.3P26.7P67.4P7
+	6
+Network Access Control (NAC)	
+2.2P22.3P22.4P25.4P5
+	4
+Network Function Virtualization (NFV)	
+5.2P5
+	1
+Network Flow Data	
+7.1P7
+	1
+Network Traffic Analysis (NTA)	
+7.1P7
+	1
+Network Virtualization	
+5.2P5
+	1
+Next-Generation Antivirus (NextGen AV)	
+2.3P22.6P22.7P2
+	3
+Next-Generation Firewall (NGFW)	
+5.3P5
+	1
+Patch Management solutions	
+2.5P2
+	1
+Platform as a Service (PaaS)	
+1.2P1
+	1
+Policy Decision Points (PDPs)	
+4.2P44.7P45.3P56.1P66.5P6
+	5
+Policy Enforcement Points (PEPs)	
+3.4P34.2P44.6P45.3P56.1P66.5P6
+	6
+Privileged Access Management (PAM)	
+1.4P11.7P16.7P6
+	3
+Public Key Infrastructure (PKI)	
+1.3P11.9P12.3P2
+	3
+Real-Time Monitoring	
+2.3P2
+	1
+Role-Based Access Control (RBAC)	
+1.2P11.4P11.5P11.7P13.4P36.1P67.4P7
+	7
+Runtime Application Self-Protection (RASP)	
+4.5P4
+	1
+Security Information and Event Management (SIEM)	
+6.5P67.2P7
+	2
+Security Orchestration, Automation, and Response (SOAR)	
+2.5P23.4P36.5P67.5P7
+	5
+Single Sign-On (SSO) and Federation	
+1.5P1
+	1
+Software Asset Management (SAM)	
+3.1P3
+	1
+Software Composition Analysis (SCA)	
+3.3P3
+	1
+Security Content Automation Protocol (SCAP)	
+2.2P2
+	1
+Software-Defined Networking (SDN)	
+5.4P5
+	1
+Source Code Management (SCM)	
+3.1P3
+	1
+Static Application Security Testing (SAST)	
+3.2P33.3P3
+	2
+Structured Threat Information eXpression (STIX) protocols	
+6.1P6
+	1
+System Cross-Domain Identity Management (SCIM)	
+1.1P1
+	1
+Threat Intelligence Platform (TIP)	
+5.1P56.7P67.2P77.3P77.5P7
+	6
+Traffic Filtering and Inspection	
+5.2P5
+	1
+Trusted Automated Exchange of Intelligence Information (TAXII)	
+6.1P6
+	1
+Trusted Execution Environment (TEE)	
+4.5P4
+	1
+User Activity Monitoring (UAM)	
+1.6P17.4P7
+	2
+User and Entity Behavior Analytics (UEBA)	
+1.6P11.8P16.3P67.3P77.4P7
+	5
+Virtual Extensible Local Area Network (VXLAN)	
+5.4P5
+	1
+Vulnerability Management solutions	
+2.5P27.2P77.3P7
+	3
