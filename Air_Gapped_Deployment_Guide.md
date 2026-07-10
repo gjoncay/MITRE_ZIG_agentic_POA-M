@@ -296,6 +296,15 @@ def ingest_file(filepath):
                 
         if max_non_nulls == 0: continue
             
+        # Extract metadata from rows above the header
+        metadata_parts = []
+        for i in range(header_idx):
+            row_vals = raw_df.iloc[i].dropna().astype(str).tolist()
+            for val in row_vals:
+                if val.strip() and val.strip() != 'nan':
+                    metadata_parts.append(val.strip())
+        sheet_metadata = " | ".join(metadata_parts)
+            
         header_row = raw_df.iloc[header_idx].astype(str)
         header_row = [str(val) if str(val) != 'nan' else f"Unnamed_{i}" for i, val in enumerate(header_row)]
         
@@ -311,6 +320,10 @@ def ingest_file(filepath):
                 if pd.notna(value) and str(value).strip() != "" and str(value).strip() != "nan":
                     finding_text_parts.append(f"{col_name}: {str(value).strip()}")
                     row_data[str(col_name)] = str(value).strip()
+                    
+            if sheet_metadata:
+                row_data["Sheet Context"] = sheet_metadata
+                finding_text_parts.insert(0, f"Sheet Context: {sheet_metadata}")
             
             if finding_text_parts:
                 full_text = " | ".join(finding_text_parts)

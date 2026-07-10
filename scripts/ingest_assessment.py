@@ -47,7 +47,16 @@ def ingest_file(filepath):
             print(f"  Skipping {sheet_name}: Appears empty.")
             continue
             
-        print(f"  Found logical header at row {header_idx + 1}. Stripping admin metadata above it...")
+        print(f"  Found logical header at row {header_idx + 1}. Extracting admin metadata above it...")
+        
+        # Extract all text from rows above the header to preserve context
+        metadata_parts = []
+        for i in range(header_idx):
+            row_vals = raw_df.iloc[i].dropna().astype(str).tolist()
+            for val in row_vals:
+                if val.strip() and val.strip() != 'nan':
+                    metadata_parts.append(val.strip())
+        sheet_metadata = " | ".join(metadata_parts)
         
         # Extract the real header and slice the dataframe
         header_row = raw_df.iloc[header_idx].astype(str)
@@ -66,10 +75,14 @@ def ingest_file(filepath):
             
             # Stringify row based on whatever random schema columns exist
             for col_name, value in row.items():
-                if pd.notna(value) and str(value).strip() != "":
-                    # E.g., "Target Address: 10.0.0.1"
+                if pd.notna(value) and str(value).strip() != "" and str(value).strip() != "nan":
                     finding_text_parts.append(f"{col_name}: {str(value).strip()}")
                     row_data[str(col_name)] = str(value).strip()
+            
+            if sheet_metadata:
+                row_data["Sheet Context"] = sheet_metadata
+                # Prepend the sheet context to the semantic text
+                finding_text_parts.insert(0, f"Sheet Context: {sheet_metadata}")
             
             if finding_text_parts:
                 full_text = " | ".join(finding_text_parts)
