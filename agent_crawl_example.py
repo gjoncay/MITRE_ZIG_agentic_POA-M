@@ -29,13 +29,10 @@ if __name__ == "__main__":
     print("\n[Agent] Searching MITRE framework using natural language: 'Red team executed a Golden Ticket attack'...")
     mitre_results = engine.semantic_search("Red team executed a Golden Ticket attack", top_k=1)
     if mitre_results:
-        # semantic_search returns (node_id, node_data, similarity_score)
-        if len(mitre_results[0]) == 3:
-            mitre_node_id, mitre_node_data, score = mitre_results[0]
-            print(f"[Agent] Found closest MITRE Node semantically: {mitre_node_data['name']} (Score: {score:.2f})")
-        else:
-            mitre_node_id, mitre_node_data = mitre_results[0]
-            print(f"[Agent] Found MITRE Node (Keyword Fallback): {mitre_node_data['name']}")
+        # semantic_search always returns (node_id, node_data, score) 3-tuples,
+        # in both semantic and keyword-fallback modes
+        mitre_node_id, mitre_node_data, score = mitre_results[0]
+        print(f"[Agent] Found closest MITRE Node: {mitre_node_data['name']} (Score: {score:.2f})")
         
         print(f"\n[Agent] Crawling MITRE countermeasures for {mitre_node_id} (Depth=2)...")
         mitre_subgraph = engine.crawl_subgraph(mitre_node_id, depth=2)

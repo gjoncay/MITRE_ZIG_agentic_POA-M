@@ -27,7 +27,11 @@ def embed_graph_nodes():
     for n, data in engine.graph.nodes(data=True):
         name = data.get('name', '')
         desc = data.get('description', '')
-        
+
+        # Skip attribute-less nodes; embedding empty text pollutes search results
+        if not name and not desc:
+            continue
+
         # Combine name and description for semantic context
         text = f"{name}. {desc}"
         node_ids.append(n)

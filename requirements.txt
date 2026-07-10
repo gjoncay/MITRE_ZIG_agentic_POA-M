@@ -1,0 +1,20 @@
+# TIER 1 — REQUIRED. The graph engine will not run without these.
+networkx>=3.0
+pandas>=2.0
+
+# TIER 2 — REQUIRED only to regenerate datasets from the raw source files
+# (consolidate_mitre_data.py, ingest_assessment.py reading Excel/ODS).
+openpyxl>=3.1        # .xlsx reading
+odfpy>=1.4           # .ods reading (ATT&CK_D3FEND_Mappings.ods)
+
+# TIER 3 — OPTIONAL. Enables semantic (vector) search. If these cannot be
+# installed on the air-gapped network, the engine automatically falls back
+# to ranked keyword search — do NOT treat their absence as a failure.
+numpy>=1.24
+scikit-learn>=1.3
+sentence-transformers>=2.2   # pulls in torch (~2GB+); also requires the
+                             # all-MiniLM-L6-v2 model files to be ported
+                             # (see Air_Gapped_Deployment_Guide.md)
+
+# TIER 4 — OPTIONAL, only for the Neo4j export path (import_to_neo4j.py)
+# neo4j>=5.0

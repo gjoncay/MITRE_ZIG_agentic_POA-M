@@ -1,79 +1,74 @@
-# MITRE Consolidated Ontology
+# MITRE CSD-H — Threat Intelligence Knowledge Graph & Assessment Engine
 
-A consolidated dataset and property graph representing the relationships across MITRE ATT&CK, D3FEND, and defensive/offensive artifacts.
+A property graph unifying **MITRE ATT&CK**, **MITRE D3FEND**, and the **NSA Zero
+Trust Implementation Guide (ZIG)**, plus a Python engine and pipeline that let an
+LLM agent translate unstructured red/blue team findings into standardized,
+framework-mapped Plans of Action & Milestones (POA&M).
 
-## Overview
-This repository contains a Python script and its generated outputs (`nodes.csv`, `edges.csv`, and `ontology.json`) which unify:
-- MITRE ATT&CK (Tactics, Techniques, Mitigations, Data Components, Analytics)
-- MITRE D3FEND (Tactics, Techniques, Artifacts)
-- Mappings connecting D3FEND artifacts and techniques directly to ATT&CK artifacts and techniques.
+Designed for **air-gapped deployment**: if ML libraries are unavailable, semantic
+search degrades automatically to ranked keyword search — see
+`Air_Gapped_Deployment_Guide.md` for the full porting/reconstruction plan.
 
-This produces an industry-standard Property Graph, making it trivial to pivot from an offensive behavior to its detection artifact, defensive artifact, and defensive mitigation.
+## What's in the graph
 
-## Generation
-To regenerate the data when new MITRE data is released, simply update the raw CSV/XLSX files and run:
-`python3 consolidate_mitre_data.py`
+| Framework | Contents |
+|---|---|
+| ATT&CK v19.1 | Tactics, techniques, mitigations, groups, software, campaigns, data components, detection strategies, analytics |
+| D3FEND | Countermeasure techniques, tactics, defensive & offensive artifacts, ATT&CK↔D3FEND mappings |
+| NSA ZIG | Pillars, capabilities, activities, technology-to-capability mappings |
 
-## Usage & Integration Guide
+Node files (`*_nodes.csv`): `id,type,name,description,url`.
+Edge files (`*_edges.csv`): `source_id,target_id,relationship_type`.
+Everything also exports as a single `ontology.json`.
 
-### 1. IMPORTING INTO PALANTIR (FOUNDRY / GOTHAM)
-Palantir's Ontology system is built natively for property graphs, making your generated CSV files the perfect format.
+## Quick start
 
-**Step 1: Upload the Datasets**
-- In Foundry, upload both `nodes.csv` and `edges.csv` into your Foundry filesystem as raw datasets.
-- Sync these datasets into the Foundry Ontology Manager.
+```bash
+pip install -r requirements.txt      # Tier 1 lines are the only hard requirement
 
-**Step 2: Define the Object Type**
-- Create a new Object Type called "MITRE Entity" (or separate them out if you prefer, but a single entity object is easiest for pivoting).
-- Use `nodes.csv` as the backing dataset.
-- Set the `id` column as the Primary Key.
-- Map the `type`, `name`, `description`, and `url` columns to standard properties.
+# Sanity-check the engine (loads mitre_*.csv + zig_*.csv from the repo root)
+python3 scripts/graph_engine.py
 
-**Step 3: Define the Link Type**
-- In the Ontology Manager, create a new Link Type.
-- Use `edges.csv` as a Many-to-Many join table.
-- Point the "Source Object" to the "MITRE Entity" Object Type, joining on `source_id` -> `id`.
-- Point the "Target Object" to the "MITRE Entity" Object Type, joining on `target_id` -> `id`.
+# OPTIONAL semantic mode: generate node embeddings once
+python3 scripts/embed_graph.py
 
-**Result:** You can now use Palantir Vertex, Object Explorer, or Quiver to visually pivot from a D3FEND tactic down to an ATT&CK technique and its associated offensive artifacts!
-
-### 2. USING THE DATA OUTSIDE OF PALANTIR
-If you don't use Palantir, this property graph format is industry-standard and can be used in many other ways.
-
-**A. Graph Databases (e.g., Neo4j, Amazon Neptune)**
-- You can import `nodes.csv` and `edges.csv` directly into Neo4j using the Neo4j Admin Import tool or the `LOAD CSV` Cypher command.
-- Once imported, you can run powerful graph queries. For example, finding the shortest path between an offensive artifact and a D3FEND technique.
-
-**B. Custom Web Dashboards (React, Vue, etc.)**
-- Use the `ontology.json` file. Since it's a standard JSON format, you can fetch it directly via an API or bundle it with your frontend app.
-- You can visualize the nodes and edges using popular JavaScript libraries like:
-  * Cytoscape.js
-  * D3.js
-  * Vis.js
-- This allows you to build a custom visual pivot tool without needing a heavy backend.
-
-**C. Python / Data Science (Jupyter, Pandas, NetworkX)**
-- You can load this graph directly into Python for security research.
-```python
-import pandas as pd
-import networkx as nx
-
-# Load the edges
-edges_df = pd.read_csv('edges.csv')
-
-# Create a directed graph
-G = nx.from_pandas_edgelist(
-    edges_df, 
-    source='source_id', 
-    target='target_id', 
-    edge_attr='relationship_type', 
-    create_using=nx.DiGraph()
-)
-
-# Find how many artifacts a specific technique is linked to
-print(len(list(G.neighbors('T1548'))))
+# Process an assessment report (any-schema Excel/CSV) and generate POA&M reports
+python3 scripts/ingest_assessment.py <report.xlsx>
+python3 agent_batch_processor.py --limit 5      # reports land in mock_output/
 ```
 
-**D. Standard BI Tools (Tableau, PowerBI)**
-- You can load the CSV files into a standard relational BI tool. 
-- You would load `nodes.csv` twice (once as "Source Node", once as "Target Node") and join them both to `edges.csv` on the `id` column to create a standard relational pivot table.
+An interactive walkthrough of the agent query pattern is in
+`agent_crawl_example.py`; the LLM-agent prompt lives in
+`threat_assessment_skill.md`.
+
+## Key files
+
+| File | Purpose |
+|---|---|
+| `scripts/graph_engine.py` | `KnowledgeGraphEngine` — load graph, `semantic_search` / `keyword_rank` / `crawl_subgraph` |
+| `scripts/ingest_assessment.py` | Flattens multi-tab, arbitrary-schema assessment reports into `processed_assessment.csv` (+ optional embeddings) |
+| `agent_batch_processor.py` | Batch: finding → T-code → D3FEND → ZIG → filled `assessment_template.md` |
+| `consolidate_mitre_data.py` | Regenerates `mitre_nodes.csv` / `mitre_edges.csv` / `ontology.json` from the raw ATT&CK xlsx + D3FEND csv/ods |
+| `scripts/parse_zig_data.py` | Regenerates `zig_nodes.csv` / `zig_edges.csv` from the ZIG PDF text extracts |
+| `build_deployment_guide.py` | Regenerates `Air_Gapped_Deployment_Guide.md` from the live source files — run after any code change |
+| `import_to_neo4j.py` | Optional Neo4j loader (nodes + typed relationships) |
+
+## Regenerating the data
+
+When MITRE releases new data, drop the updated raw files in the repo root and run:
+
+```bash
+python3 consolidate_mitre_data.py
+python3 scripts/embed_graph.py          # only if using semantic mode
+python3 build_deployment_guide.py       # keep the deployment guide in sync
+```
+
+## Using the graph elsewhere
+
+- **Palantir Foundry/Gotham** — upload the node/edge CSVs; object type keyed on
+  `id`, link type joining `source_id`/`target_id` → `id`.
+- **Neo4j** — `python3 import_to_neo4j.py` (edit URI/credentials at the top), or
+  `LOAD CSV` directly.
+- **Python/NetworkX** — `from scripts.graph_engine import KnowledgeGraphEngine`.
+- **Web dashboards / BI** — use `ontology.json` (Cytoscape.js, D3.js) or join the
+  CSVs relationally (Tableau, PowerBI).
