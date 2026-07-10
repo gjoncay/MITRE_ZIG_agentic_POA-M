@@ -1,5 +1,6 @@
-_sheet,Target Address,Observation,Severity,Recommendation,Host,Vulnerability,CVSS
-Navy_Findings,10.0.0.1,Default credentials used on router,Critical,Change password,,,
-Navy_Findings,10.0.0.2,SMBv1 enabled on server,High,Disable SMBv1,,,
-NSA_Findings,,,,,wkstn-100,Local admin password shared across endpoints,8.5
-NSA_Findings,,,,,wkstn-101,Missing EDR agent,7.2
+_sheet,Hostname,IP,Severity,Finding,Description
+Sheet1,CORE-RTR-01,10.0.0.1,High,Network: Cisco Discovery Protocol (CDP) enabled on external interfaces.,External facing router broadcasts sensitive network topology data.
+Sheet1,WEB-PORTAL-02,172.16.5.10,Critical,Application: SQL Injection vulnerability on login portal.,Unsanitized user input on the login form allows arbitrary database queries.
+Sheet1,DC-02,192.168.1.16,Critical,Active Directory: Default Domain Admin credentials in use.,The built-in Administrator account is using a known default password.
+Sheet1,AWS-S3-PROD,Cloud,High,Cloud: S3 bucket publicly readable.,A production S3 bucket containing PII has public read access enabled.
+Sheet1,USER-LAPTOP-99,10.10.50.22,Medium,Endpoint: Endpoint missing EDR agent.,A corporate laptop was deployed without CrowdStrike Falcon installed.

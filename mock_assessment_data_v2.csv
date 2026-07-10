@@ -1,0 +1,6 @@
+Hostname,IP,Severity,Finding,Description
+CORE-RTR-01,10.0.0.1,High,Network: Cisco Discovery Protocol (CDP) enabled on external interfaces.,External facing router broadcasts sensitive network topology data.
+WEB-PORTAL-02,172.16.5.10,Critical,Application: SQL Injection vulnerability on login portal.,Unsanitized user input on the login form allows arbitrary database queries.
+DC-02,192.168.1.16,Critical,Active Directory: Default Domain Admin credentials in use.,The built-in Administrator account is using a known default password.
+AWS-S3-PROD,Cloud,High,Cloud: S3 bucket publicly readable.,A production S3 bucket containing PII has public read access enabled.
+USER-LAPTOP-99,10.10.50.22,Medium,Endpoint: Endpoint missing EDR agent.,A corporate laptop was deployed without CrowdStrike Falcon installed.

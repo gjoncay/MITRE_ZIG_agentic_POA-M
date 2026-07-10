@@ -12,6 +12,9 @@ To accomplish this, you must use the Python `KnowledgeGraphEngine` provided in t
 > **CRITICAL INSTRUCTION: NARROW SCOPE**
 > Do not generate a single, massive, monolithic report for a large dataset. You must generate a **series of individual, narrowly focused Action Plans**. Each output report should cover only a single finding (or a very small handful of closely related correlations).
 
+> **CRITICAL INSTRUCTION: FORMATTING**
+> Do NOT use emojis in your output. Ensure that the primary MITRE mapping is ALWAYS an ATT&CK Technique (T-code), supplemented by Analytics and Mitigations.
+
 ## Execution Workflow
 
 Follow these exact steps when a user provides you with threat data:
@@ -20,14 +23,14 @@ Follow these exact steps when a user provides you with threat data:
 Read the unstructured threat report provided by the user. Identify the core technical actions, vulnerabilities, or attacker behaviors (e.g., "bypassed authentication," "forged Kerberos tickets," "lateral movement").
 
 ### Step 2: Graph Mapping
-Map the extracted behaviors to the MITRE framework.
+Map the extracted behaviors strictly to a MITRE ATT&CK **Technique** (T-code).
 Write and execute a Python script that instantiates `KnowledgeGraphEngine()` and searches for the extracted terms. 
 - Try using `engine.semantic_search(text)` first if vector embeddings are enabled. 
-- If semantic search throws an error or is disabled, fallback to `engine.search_nodes(keyword, exact_match=False)`.
-Identify the closest matching MITRE ATT&CK node (e.g., `T1558.001`).
+- You MUST filter the returned results to find the highest scoring node whose ID starts with `T` (e.g., `T1558.001`). Do not map the primary finding to an Analytic (`AN...`) or Mitigation (`M...`).
+- If semantic search throws an error or is disabled, fallback to `engine.search_nodes(keyword, exact_match=False)` and again, filter for `T` nodes.
 
 ### Step 3: Mitigation Crawling
-Once you have the starting MITRE node, crawl the graph to find connected defensive countermeasures.
+Once you have the starting MITRE Technique node, crawl the graph to find connected defensive countermeasures, analytics, and mitigations.
 Execute `engine.crawl_subgraph(node_id, depth=3)`. 
 Review the returned JSON subgraph to identify the connected MITRE D3FEND countermeasures (e.g., Credential Rotation).
 

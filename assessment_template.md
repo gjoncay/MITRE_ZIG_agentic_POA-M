@@ -10,7 +10,7 @@
 
 **Finding / Threat Input:** {THREAT_INPUT_SUMMARY}
 
-### 🚨 Threat Actor Exploitation & Impact (The "So What?")
+### Threat Actor Exploitation & Impact (The "So What?")
 *Detail exactly how an adversary could weaponize this issue, the specific TTPs they would use, and the potential business impact.*
 - **Exploitation Scenario:** {EXPLOITATION_SCENARIO}
 - **Potential Impact:** {BUSINESS_IMPACT}
@@ -19,11 +19,16 @@
 
 ## 2. MITRE Framework Analysis
 
-### ATT&CK Mapping
-*Details on the attacker's tactics and techniques.*
+### ATT&CK Mapping (TTPs)
+*Details on the primary attacker tactic and technique.*
 - **Tactic:** {MITRE_TACTIC}
-- **Technique(s):** {MITRE_TECHNIQUE_ID} - {MITRE_TECHNIQUE_NAME}
+- **Technique(s):** [{MITRE_TECHNIQUE_ID}] {MITRE_TECHNIQUE_NAME}
 - **Description:** {MITRE_TECHNIQUE_DESCRIPTION}
+
+### Supplemental MITRE Data (Analytics & Mitigations)
+*Associated defensive guidance from the MITRE framework.*
+- **Analytics/Detections:** {MITRE_ANALYTICS}
+- **Native Mitigations:** {MITRE_MITIGATIONS}
 
 ### D3FEND Countermeasures
 *The defensive mechanisms and artifacts required to detect, isolate, or mitigate the threat based on the D3FEND matrix.*

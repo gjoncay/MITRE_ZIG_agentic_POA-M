@@ -95,9 +95,13 @@ class KnowledgeGraphEngine:
             return self.search_nodes(query_text)[:top_k]
             
         # Embed the query
-        query_vec = self.embedding_model.encode([query_text])
         
-        # Calculate cosine similarity
+        # --- EXTERNAL API SCAFFOLDING ---
+        # If using an Agency API instead of a local model:
+        # query_vec = get_api_embedding(query_text) # Must return a 2D array e.g. np.array([[0.1, 0.2, ...]])
+        # --------------------------------
+        
+        query_vec = self.embedding_model.encode([query_text])
         similarities = cosine_similarity(query_vec, self.embeddings)[0]
         
         # Get top K indices

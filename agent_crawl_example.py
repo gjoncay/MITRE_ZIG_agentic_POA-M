@@ -71,7 +71,7 @@ if __name__ == "__main__":
 
 **Finding / Threat Input:** {threat_intel}
 
-### 🚨 Threat Actor Exploitation & Impact (The "So What?")
+### Threat Actor Exploitation & Impact (The "So What?")
 *Detail exactly how an adversary could weaponize this issue, the specific TTPs they would use, and the potential business impact.*
 - **Exploitation Scenario:** An adversary could use a stolen or forged Ticket Granting Ticket (TGT) to impersonate any user on the domain indefinitely, bypassing normal authentication mechanisms and password resets.
 - **Potential Impact:** Complete domain compromise, allowing unhindered lateral movement, data exfiltration, and ransomware deployment.
@@ -80,10 +80,18 @@ if __name__ == "__main__":
 
 ## 2. MITRE Framework Analysis
 
-### ATT&CK Mapping
+### ATT&CK Mapping (TTPs)
+*Details on the primary attacker tactic and technique.*
 - **Tactic:** Credential Access (Inferred)
-- **Technique(s):** {mitre_node_id} - {mitre_node_data['name']}
+- **Technique(s):** [T1550.003] Use Alternate Authentication Material: Pass the Ticket
 - **Description:** Adversaries may forge Kerberos tickets to bypass authentication.
+
+### Supplemental MITRE Data (Analytics & Mitigations)
+*Associated defensive guidance from the MITRE framework.*
+- **Analytics/Detections:** 
+  - [AN0316] Detects AS-REP roasting attempts by monitoring for Kerberos AS-REQ/AS-REP
+- **Native Mitigations:** 
+  - [M1038] Execution Prevention
 
 ### D3FEND Countermeasures
 - **Countermeasure(s):** 

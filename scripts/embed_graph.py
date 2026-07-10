@@ -34,6 +34,14 @@ def embed_graph_nodes():
         texts_to_embed.append(text)
         
     print("Generating embeddings (this may take a minute)...")
+    # --- EXTERNAL API SCAFFOLDING ---
+    # If using an Agency API instead of a local model:
+    # api_embeddings = []
+    # for text in texts_to_embed:
+    #     api_embeddings.append(call_agency_api(text))
+    # embeddings = np.array(api_embeddings)
+    # --------------------------------
+    
     embeddings = model.encode(texts_to_embed, show_progress_bar=True)
     
     # Save the embeddings
