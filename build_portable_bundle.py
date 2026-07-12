@@ -35,8 +35,10 @@ EMBEDDED_FILES = [
     ("threat_assessment_skill.md", "markdown"),
     ("consolidate_mitre_data.py", "python"),
     ("scripts/parse_zig_data.py", "python"),
+    ("consolidate_cref_data.py", "python"),
     ("import_to_neo4j.py", "python"),
     ("build_deployment_guide.py", "python"),
+    ("build_cref_extension_guide.py", "python"),
     ("README.md", "markdown"),
 ]
 
@@ -113,9 +115,9 @@ DOC_TEMPLATE = '''# PORTABLE RECONSTRUCTION BUNDLE — MITRE/ZIG Threat Assessme
 >    mechanically using STEP 0 below, so the checksums prove byte-exactness.
 > 2. Do not modify, reformat, or "improve" any file.
 > 3. Follow the sections in order and run every verification command.
-> 4. The four data CSVs (`mitre_nodes.csv`, `mitre_edges.csv`, `zig_nodes.csv`,
->    `zig_edges.csv`) are plain text and should have been transferred alongside
->    this document. If they are missing, see Section 5.
+> 4. The six data CSVs (`mitre_nodes.csv`, `mitre_edges.csv`, `zig_nodes.csv`,
+>    `zig_edges.csv`, `cref_nodes.csv`, `cref_edges.csv`) are plain text and should
+>    have been transferred alongside this document. If they are missing, see Section 5.
 
 ---
 
@@ -149,7 +151,7 @@ re-run the extractor to re-verify.**
 
 # STEP 1 — Assemble the data
 
-Place the four CSVs (ported separately, as text) in the project root next to
+Place the six CSVs (ported separately, as text) in the project root next to
 `extract_bundle.py`. Expected layout after extraction + data placement:
 
 ```text
@@ -158,9 +160,11 @@ Place the four CSVs (ported separately, as text) in the project root next to
 ├── mitre_edges.csv        ├── agent_crawl_example.py
 ├── zig_nodes.csv          ├── assessment_template.md
 ├── zig_edges.csv          ├── threat_assessment_skill.md
-├── requirements.txt       ├── consolidate_mitre_data.py
-├── README.md              ├── import_to_neo4j.py
-├── build_deployment_guide.py
+├── cref_nodes.csv         ├── consolidate_mitre_data.py
+├── cref_edges.csv         ├── consolidate_cref_data.py
+├── requirements.txt       ├── import_to_neo4j.py
+├── README.md              ├── build_deployment_guide.py
+└── build_cref_extension_guide.py
 └── scripts/
     ├── graph_engine.py
     ├── embed_graph.py
@@ -188,8 +192,8 @@ not treat the `[Warning] Semantic search unavailable...` message as an error.
 python3 scripts/graph_engine.py
 ```
 
-Must print `Knowledge Graph initialized with ~5150 nodes and ~29208 edges`
-(small drift is fine if the CSVs were regenerated from newer MITRE data; a
+Must print `Knowledge Graph initialized with ~5618 nodes and ~43194 edges`
+(small drift is fine if the CSVs were regenerated from newer MITRE/CREF data; a
 number near 0 means the CSVs are not in the project root), then successful
 lookups of `ZIG-PIL-1` and `T1548`, then search results for a test query.
 
@@ -256,10 +260,15 @@ Read `threat_assessment_skill.md` (extracted above) — it is the operating
 prompt for the analysis agent: per finding, map to an ATT&CK T-code via
 `semantic_search` (filter IDs starting with `T` + digit), crawl defenses with
 `crawl_subgraph(t_code, depth=2)` (collect `d3fend_technique`,
-`defensive_artifact`, `attack_analytic`, `attack_mitigation` node types),
-correlate to Zero Trust with `keyword_rank(countermeasure_name)` (filter
-`zig_capability` / `zig_technology`), and fill `assessment_template.md` —
-never inventing framework IDs. Bulk mode:
+`defensive_artifact`, `attack_analytic`, `attack_mitigation` node types).
+Then: correlate to Zero Trust by checking the same subgraph for a direct
+`zig_activity --mitigates--> T-code` edge first, falling back to
+`keyword_rank(countermeasure_name)` only if none exists; correlate to CREF
+architectural resiliency via `cref_approach --mitigates_architecturally--> T-code`;
+cite NIST SP 800-53 controls via `cref_mitigation --satisfies_control--> control`;
+and frame mission impact via the `csa --associated_with_technique--> cref_technique`
+edge. Fill all 7 sections of `assessment_template.md` for EVERY finding — there is
+no severity gate — never inventing framework IDs. Bulk mode:
 `python3 scripts/ingest_assessment.py <report.xlsx>` then
 `python3 agent_batch_processor.py --limit N`.
 
@@ -267,27 +276,36 @@ For the full reference documentation (asset tiers, graph schema tables,
 troubleshooting), regenerate it locally:
 
 ```bash
-python3 build_deployment_guide.py   # writes Air_Gapped_Deployment_Guide.md
+python3 build_deployment_guide.py         # writes Air_Gapped_Deployment_Guide.md
+python3 build_cref_extension_guide.py     # writes CREF_ZERO_TRUST_EXTENSION_GUIDE.md
 ```
 
 ---
 
 # STEP 5 — ONLY if the CSVs did not survive transfer
 
-The graph can be regenerated from raw MITRE/NSA sources IF they can be
+The graph can be regenerated from raw MITRE/NSA/NIST sources IF they can be
 obtained on this network (they are common on classified mirrors):
 `enterprise-attack-v19.1(1).xlsx` (or newer), `d3fend.csv`,
-`d3fend-full-mappings.csv`, `ATT&CK_D3FEND_Mappings.ods`, and text extracts of
-the NSA ZIG PDFs plus `zig_tech_mappings.txt`. Then (Tier 2 libs required:
-`pip install openpyxl odfpy`):
+`d3fend-full-mappings.csv`, `ATT&CK_D3FEND_Mappings.ods`, text extracts of
+the NSA ZIG PDFs plus `zig_tech_mappings.txt`, and `CREF/*.csv`. Then (Tier 2
+libs required: `pip install openpyxl odfpy`), IN THIS ORDER:
 
 ```bash
 python3 consolidate_mitre_data.py    # -> mitre_nodes.csv, mitre_edges.csv
 python3 scripts/parse_zig_data.py    # -> zig_nodes.csv, zig_edges.csv (run where the ZIG .txt files are)
+python3 consolidate_cref_data.py     # -> cref_nodes.csv, cref_edges.csv; ALSO reconciles zig_nodes.csv/zig_edges.csv - run LAST
 ```
 
-A few dropped edges reported by the integrity pass is normal (tens, not
-hundreds). After regenerating, redo STEP 2, and STEP 3 if in semantic mode.
+`consolidate_cref_data.py` reuses the existing `ZIG-PIL-*`/`ZIG-CAP-*`/`ZIG-ACT-*`
+IDs rather than duplicating the DoD Zero Trust pillar taxonomy, and cleans up
+PDF-extraction artifacts in `zig_activity` names — do not re-run
+`scripts/parse_zig_data.py` after it or you will overwrite that cleanup.
+
+A few dropped edges reported by each integrity pass is normal (tens, not
+hundreds). After regenerating, redo STEP 2, and STEP 3 if in semantic mode
+(embeddings MUST be regenerated if `consolidate_cref_data.py` ran, since the
+node set changed).
 
 ---
 

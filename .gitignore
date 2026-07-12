@@ -1,3 +1,7 @@
 venv/
 __pycache__/
 *.pyc
+.env
+webapp/backend/uploads/
+reports/
+.vscode/

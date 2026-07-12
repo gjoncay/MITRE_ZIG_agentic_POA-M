@@ -1,0 +1,18 @@
+# Web API layer (main.py). ADDITIVE to /home/chillycholla/Projects/MITRE_CSD-H/requirements.txt
+# (graph/pipeline deps: networkx, pandas, sentence-transformers, etc.) -- the
+# Docker build installs both requirements.txt files, this one only lists what's
+# new for the FastAPI/web layer.
+fastapi
+uvicorn[standard]
+python-multipart
+
+# PDF export (pdf_export.py): markdown -> HTML -> PDF.
+#
+# weasyprint has native system dependencies (Pango, cairo, GDK-Pixbuf, etc.)
+# that are NOT installed by pip. The Dockerfile for this backend needs, in
+# addition to `pip install -r requirements.txt`:
+#   apt-get install -y libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 \
+#     libffi-dev shared-mime-info
+# (Debian/Ubuntu base image package names; adjust if using a different base.)
+markdown
+weasyprint

@@ -1,0 +1,338 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Light theme - Chinook Cyber design system */
+  --bg-base: #f5efe6;
+  --bg-sunken: #ece4d6; /* one step below --bg-base (wells, pressed areas) */
+  --bg-surface: #fffdf9;
+  --bg-raised: #efe7da;
+  --bg-overlay: #fffdf9;
+  --border-subtle: rgba(29, 31, 29, 0.04);
+  --border-default: #e4dbcd;
+  --border-strong: #d6cbb8;
+  --text-primary: #1d1f1d;
+  --text-secondary: #55605a;
+  --text-muted: #6c7169; /* 4.9:1 on --bg-surface (WCAG AA for small text) */
+  --text-inverse: #fffdf9;
+  --accent-primary: #58855f;
+  --accent-primary-rgb: 88, 133, 95;
+  --accent-secondary: #e0882f;
+  --accent-glow: rgba(88, 133, 95, 0.1);
+  /* Semantic status accents — text-safe on light surfaces (≥4.5:1). */
+  --accent-negative: #c73e3e; /* destructive / actively exploited */
+  --accent-negative-glow: rgba(199, 62, 62, 0.1);
+  --accent-warning: #9c620d; /* elevated risk */
+  --accent-warning-glow: rgba(156, 98, 13, 0.1);
+  --accent-positive: #3d7a52; /* covered / healthy */
+  --accent-positive-glow: rgba(61, 122, 82, 0.1);
+  --bg-scrim: rgba(245, 239, 230, 0.6); /* modal backdrop (--bg-base @ 60%) */
+  --shadow-card: 0 1px 2px rgba(29, 31, 29, 0.05), 0 1px 3px rgba(29, 31, 29, 0.08);
+
+  /* OAKOC tier palette — a shared color *vocabulary* with the MITRE Diamond
+     Dashboard (every hue below appears in that app's ATT&CK / D3FEND palettes),
+     so the two products read as siblings. Color encodes meaning, never decoration:
+       observation  = detect-blue   (our sensors)
+       avenue       = brand tan      (how the adversary gets in — caution)
+       obstacle     = harden-teal    (our friendly defensive barriers, NOT alarm-red)
+       key-terrain  = brand pine     (the crown jewels we defend)
+       cover        = stealth-purple (adversary concealment / evasion) */
+  --color-observation: #4f8ef7;
+  --color-avenue: #e0882f;
+  --color-obstacle: #14b8a6;
+  --color-key-terrain: #58855f;
+  --color-cover: #a855f7;
+
+  /* Faint tier tints for the defense-in-depth strata lanes on the canvas. */
+  --tint-observation: rgba(79, 142, 247, 0.07);
+  --tint-avenue: rgba(224, 136, 47, 0.07);
+  --tint-obstacle: rgba(20, 184, 166, 0.07);
+  --tint-key-terrain: rgba(88, 133, 95, 0.08);
+  --tint-cover: rgba(168, 85, 247, 0.06);
+}
+
+:root[data-theme="dark"] {
+  /* Dark theme - Chinook Cyber design system */
+  --bg-base: #1d1f1d;
+  --bg-sunken: #161816; /* one step below --bg-base */
+  --bg-surface: #2c2e2c;
+  --bg-raised: #343734;
+  --bg-overlay: #3a3d39;
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border-default: #43463f;
+  --border-strong: #565a51;
+  --text-primary: #eef1ea;
+  --text-secondary: #9aa39a;
+  --text-muted: #9ba297; /* 5.2:1 on --bg-surface (WCAG AA for small text) */
+  --text-inverse: #1d1f1d;
+  --accent-primary: #6fa777;
+  --accent-primary-rgb: 111, 167, 119;
+  --accent-secondary: #eaa15a;
+  --accent-glow: rgba(111, 167, 119, 0.12);
+  /* Status accents lifted for dark surfaces (per the lift-in-dark rule). */
+  --accent-negative: #f87171;
+  --accent-negative-glow: rgba(248, 113, 113, 0.1);
+  --accent-warning: #f0b04f;
+  --accent-warning-glow: rgba(240, 176, 79, 0.12);
+  --accent-positive: #6fbf87;
+  --accent-positive-glow: rgba(111, 191, 135, 0.12);
+  --bg-scrim: rgba(29, 31, 29, 0.6); /* modal backdrop (--bg-base @ 60%) */
+  --shadow-card: none;
+
+  /* OAKOC palette lifted for contrast on dark surfaces (per the design system:
+     don't reuse the light hex, brighten it). */
+  --color-observation: #6fa8ff;
+  --color-avenue: #eaa15a;
+  --color-obstacle: #2dd4bf;
+  --color-key-terrain: #6fa777;
+  --color-cover: #c084fc;
+
+  --tint-observation: rgba(111, 168, 255, 0.10);
+  --tint-avenue: rgba(234, 161, 90, 0.09);
+  --tint-obstacle: rgba(45, 212, 191, 0.09);
+  --tint-key-terrain: rgba(111, 167, 119, 0.11);
+  --tint-cover: rgba(192, 132, 252, 0.09);
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    margin: 0;
+    letter-spacing: -0.02em;
+    font-weight: 600;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  :focus-visible {
+    outline: 1px solid var(--accent-primary);
+    outline-offset: 1px;
+  }
+
+  /* Custom Slim Scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--border-strong);
+    border: 3px solid var(--bg-base);
+    border-radius: 8px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--text-muted);
+  }
+}
+
+@layer utilities {
+  .data-label {
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+
+  .mono {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-variant-ligatures: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Thin themed scrollbar for dense scroll regions (swimlanes, chain builder). */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border: none;
+  border-radius: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}
+
+/* Clamp long card descriptions to two lines in Plan mode. */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ============================== Markdown report body ============================== */
+/* react-markdown renders bare elements with no styling; give report prose the
+   same type rhythm and table treatment as the rest of the app. */
+.markdown-body {
+  color: var(--text-primary);
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+}
+.markdown-body h1 {
+  font-size: 1.5em;
+}
+.markdown-body h2 {
+  font-size: 1.25em;
+}
+.markdown-body h3 {
+  font-size: 1.1em;
+}
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.75em 0;
+}
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5em;
+}
+.markdown-body a {
+  color: var(--accent-primary);
+  text-decoration: underline;
+}
+.markdown-body code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.9em;
+  background-color: var(--bg-raised);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.markdown-body pre {
+  background-color: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+}
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+.markdown-body blockquote {
+  margin: 0.75em 0;
+  padding-left: 1em;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border-default);
+  margin: 1.5em 0;
+}
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.95em;
+  overflow-x: auto;
+  display: block;
+}
+.markdown-body table thead {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+.markdown-body table tbody {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border-default);
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+.markdown-body th {
+  background-color: var(--bg-raised);
+  font-weight: 600;
+}
+.markdown-body tr:nth-child(even) {
+  background-color: var(--bg-sunken);
+}
+
+/* ============================== Print ============================== */
+@media print {
+  .print-hide {
+    display: none !important;
+  }
+
+  :root,
+  :root[data-theme="dark"] {
+    --bg-base: #ffffff;
+    --bg-surface: #ffffff;
+    --bg-raised: #ffffff;
+    --bg-overlay: #ffffff;
+    --border-subtle: #dddddd;
+    --border-default: #c8c8c8;
+    --border-strong: #999999;
+    --text-primary: #000000;
+    --text-secondary: #1a1a1a;
+    --text-muted: #444444;
+    --text-inverse: #ffffff;
+    --accent-primary: #000000;
+    --accent-secondary: #333333;
+    --accent-glow: transparent;
+    --bg-scrim: transparent;
+    --shadow-card: none;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
