@@ -1,0 +1,218 @@
+technique,cref_technique_id,approach,approach_id,effect,effect_id
+Adaptive Response,t1,Dynamic Reconfiguration,a1,Contain,e10
+Deception,t4,Misdirection,a13,Contain,e10
+Diversity,t5,Design Diversity,a16,Contain,e10
+Diversity,t5,Synthetic Diversity,a17,Contain,e10
+Diversity,t5,Information Diversity,a18,Contain,e10
+Dynamic Positioning,t6,Fragmentation,a24,Contain,e10
+Privilege Restriction,t9,Trust-Based Privilege Management,a32,Contain,e10
+Privilege Restriction,t9,Attribute-Based Usage Restriction,a33,Contain,e10
+Privilege Restriction,t9,Dynamic Privileges,a34,Contain,e10
+Segmentation,t12,Predefined Segmentation,a43,Contain,e10
+Segmentation,t12,Dynamic Segmentation and Isolation,a44,Contain,e10
+Coordinated Protection,t3,Calibrated Defense-in-Depth,a7,Contain,e10
+Deception,t4,Obfuscation,a11,Degrade,e11
+Deception,t4,Disinformation,a12,Degrade,e11
+Diversity,t5,Architectural Diversity,a15,Degrade,e11
+Diversity,t5,Design Diversity,a16,Degrade,e11
+Diversity,t5,Synthetic Diversity,a17,Degrade,e11
+Dynamic Positioning,t6,Functional Relocation of Cyber Resources,a22,Degrade,e11
+Dynamic Positioning,t6,Asset Mobility,a23,Degrade,e11
+Dynamic Positioning,t6,Fragmentation,a24,Degrade,e11
+Dynamic Positioning,t6,Distributed Functionality,a25,Degrade,e11
+Adaptive Response,t1,Adaptive Management,a3,Degrade,e11
+Non-Persistence,t8,Non-Persistent Services,a30,Degrade,e11
+Non-Persistence,t8,Non-Persistent Connectivity,a31,Degrade,e11
+Privilege Restriction,t9,Trust-Based Privilege Management,a32,Degrade,e11
+Privilege Restriction,t9,Attribute-Based Usage Restriction,a33,Degrade,e11
+Privilege Restriction,t9,Dynamic Privileges,a34,Degrade,e11
+Segmentation,t12,Predefined Segmentation,a43,Degrade,e11
+Segmentation,t12,Dynamic Segmentation and Isolation,a44,Degrade,e11
+Coordinated Protection,t3,Calibrated Defense-in-Depth,a7,Degrade,e11
+Coordinated Protection,t3,Consistency Analysis,a8,Degrade,e11
+Adaptive Response,t1,Dynamic Reconfiguration,a1,Delay,e12
+Deception,t4,Obfuscation,a11,Delay,e12
+Deception,t4,Disinformation,a12,Delay,e12
+Deception,t4,Misdirection,a13,Delay,e12
+Diversity,t5,Architectural Diversity,a15,Delay,e12
+Diversity,t5,Design Diversity,a16,Delay,e12
+Diversity,t5,Synthetic Diversity,a17,Delay,e12
+Diversity,t5,Information Diversity,a18,Delay,e12
+Diversity,t5,Path Diversity,a19,Delay,e12
+Adaptive Response,t1,Dynamic Resource Allocation,a2,Delay,e12
+Dynamic Positioning,t6,Functional Relocation of Cyber Resources,a22,Delay,e12
+Dynamic Positioning,t6,Asset Mobility,a23,Delay,e12
+Dynamic Positioning,t6,Fragmentation,a24,Delay,e12
+Dynamic Positioning,t6,Distributed Functionality,a25,Delay,e12
+Non-Persistence,t8,Non-Persistent Information,a29,Delay,e12
+Adaptive Response,t1,Adaptive Management,a3,Delay,e12
+Non-Persistence,t8,Non-Persistent Services,a30,Delay,e12
+Non-Persistence,t8,Non-Persistent Connectivity,a31,Delay,e12
+Privilege Restriction,t9,Trust-Based Privilege Management,a32,Delay,e12
+Privilege Restriction,t9,Attribute-Based Usage Restriction,a33,Delay,e12
+Privilege Restriction,t9,Dynamic Privileges,a34,Delay,e12
+Segmentation,t12,Predefined Segmentation,a43,Delay,e12
+Segmentation,t12,Dynamic Segmentation and Isolation,a44,Delay,e12
+Substantiated Integrity,t13,Provenance Tracking,a46,Delay,e12
+Unpredictability,t14,Temporal Unpredictability,a48,Delay,e12
+Unpredictability,t14,Contextual Unpredictability,a49,Delay,e12
+Coordinated Protection,t3,Calibrated Defense-in-Depth,a7,Delay,e12
+Adaptive Response,t1,Dynamic Reconfiguration,a1,Exert,e13
+Coordinated Protection,t3,Self-Challenge,a10,Exert,e13
+Deception,t4,Obfuscation,a11,Exert,e13
+Deception,t4,Disinformation,a12,Exert,e13
+Deception,t4,Misdirection,a13,Exert,e13
+Deception,t4,Tainting,a14,Exert,e13
+Diversity,t5,Architectural Diversity,a15,Exert,e13
+Diversity,t5,Design Diversity,a16,Exert,e13
+Diversity,t5,Synthetic Diversity,a17,Exert,e13
+Diversity,t5,Information Diversity,a18,Exert,e13
+Diversity,t5,Path Diversity,a19,Exert,e13
+Adaptive Response,t1,Dynamic Resource Allocation,a2,Exert,e13
+Diversity,t5,Supply Chain Diversity,a20,Exert,e13
+Dynamic Positioning,t6,Functional Relocation of Cyber Resources,a22,Exert,e13
+Dynamic Positioning,t6,Fragmentation,a24,Exert,e13
+Dynamic Positioning,t6,Distributed Functionality,a25,Exert,e13
+Contextual Awareness,t7,Dynamic Threat Awareness,a27,Exert,e13
+Non-Persistence,t8,Non-Persistent Information,a29,Exert,e13
+Adaptive Response,t1,Adaptive Management,a3,Exert,e13
+Non-Persistence,t8,Non-Persistent Services,a30,Exert,e13
+Non-Persistence,t8,Non-Persistent Connectivity,a31,Exert,e13
+Privilege Restriction,t9,Trust-Based Privilege Management,a32,Exert,e13
+Privilege Restriction,t9,Attribute-Based Usage Restriction,a33,Exert,e13
+Privilege Restriction,t9,Dynamic Privileges,a34,Exert,e13
+Realignment,t10,Offloading,a36,Exert,e13
+Realignment,t10,Restriction,a37,Exert,e13
+Realignment,t10,Replacement,a38,Exert,e13
+Realignment,t10,Specialization,a39,Exert,e13
+Segmentation,t12,Predefined Segmentation,a43,Exert,e13
+Substantiated Integrity,t13,Integrity Checks,a45,Exert,e13
+Substantiated Integrity,t13,Provenance Tracking,a46,Exert,e13
+Unpredictability,t14,Temporal Unpredictability,a48,Exert,e13
+Unpredictability,t14,Contextual Unpredictability,a49,Exert,e13
+Coordinated Protection,t3,Calibrated Defense-in-Depth,a7,Exert,e13
+Coordinated Protection,t3,Consistency Analysis,a8,Exert,e13
+Redundancy,t11,Replication,a42,Shorten,e15
+Adaptive Response,t1,Dynamic Reconfiguration,a1,Shorten,e15
+Diversity,t5,Information Diversity,a18,Shorten,e15
+Diversity,t5,Path Diversity,a19,Shorten,e15
+Adaptive Response,t1,Dynamic Resource Allocation,a2,Shorten,e15
+Diversity,t5,Supply Chain Diversity,a20,Shorten,e15
+Dynamic Positioning,t6,Functional Relocation of Cyber Resources,a22,Shorten,e15
+Dynamic Positioning,t6,Asset Mobility,a23,Shorten,e15
+Adaptive Response,t1,Adaptive Management,a3,Shorten,e15
+Non-Persistence,t8,Non-Persistent Services,a30,Shorten,e15
+Non-Persistence,t8,Non-Persistent Connectivity,a31,Shorten,e15
+Privilege Restriction,t9,Dynamic Privileges,a34,Shorten,e15
+Redundancy,t11,Protected Backup and Restore,a40,Shorten,e15
+Redundancy,t11,Surplus Capacity,a41,Shorten,e15
+Coordinated Protection,t3,Orchestration,a9,Shorten,e15
+Redundancy,t11,Replication,a42,Reduce,e16
+Adaptive Response,t1,Dynamic Reconfiguration,a1,Reduce,e16
+Diversity,t5,Information Diversity,a18,Reduce,e16
+Diversity,t5,Path Diversity,a19,Reduce,e16
+Adaptive Response,t1,Dynamic Resource Allocation,a2,Reduce,e16
+Diversity,t5,Supply Chain Diversity,a20,Reduce,e16
+Dynamic Positioning,t6,Functional Relocation of Cyber Resources,a22,Reduce,e16
+Adaptive Response,t1,Adaptive Management,a3,Reduce,e16
+Non-Persistence,t8,Non-Persistent Services,a30,Reduce,e16
+Non-Persistence,t8,Non-Persistent Connectivity,a31,Reduce,e16
+Redundancy,t11,Protected Backup and Restore,a40,Reduce,e16
+Redundancy,t11,Surplus Capacity,a41,Reduce,e16
+Segmentation,t12,Predefined Segmentation,a43,Reduce,e16
+Segmentation,t12,Dynamic Segmentation and Isolation,a44,Reduce,e16
+Coordinated Protection,t3,Orchestration,a9,Reduce,e16
+Coordinated Protection,t3,Self-Challenge,a10,Detect,e18
+Deception,t4,Tainting,a14,Detect,e18
+Dynamic Positioning,t6,Functional Relocation of Sensors,a21,Detect,e18
+Contextual Awareness,t7,Dynamic Resource Awareness,a26,Detect,e18
+Contextual Awareness,t7,Dynamic Threat Awareness,a27,Detect,e18
+Contextual Awareness,t7,Mission Dependency and Status Visualization,a28,Detect,e18
+Analytic Monitoring,t2,Monitoring and Damage Assessment,a4,Detect,e18
+Substantiated Integrity,t13,Integrity Checks,a45,Detect,e18
+Substantiated Integrity,t13,Provenance Tracking,a46,Detect,e18
+Substantiated Integrity,t13,Behavior Validation,a47,Detect,e18
+Unpredictability,t14,Temporal Unpredictability,a48,Detect,e18
+Analytic Monitoring,t2,Sensor Fusion and Analysis,a5,Detect,e18
+Analytic Monitoring,t2,Forensic and Behavioral Analysis,a6,Detect,e18
+Coordinated Protection,t3,Consistency Analysis,a8,Detect,e18
+Diversity,t5,Information Diversity,a18,Detect,e18
+Deception,t4,Misdirection,a13,Scrutinize,e19
+Deception,t4,Tainting,a14,Scrutinize,e19
+Analytic Monitoring,t2,Monitoring and Damage Assessment,a4,Scrutinize,e19
+Analytic Monitoring,t2,Forensic and Behavioral Analysis,a6,Scrutinize,e19
+Deception,t4,Disinformation,a12,Deter,e2
+Deception,t4,Misdirection,a13,Deter,e2
+Deception,t4,Tainting,a14,Deter,e2
+Diversity,t5,Architectural Diversity,a15,Deter,e2
+Diversity,t5,Design Diversity,a16,Deter,e2
+Diversity,t5,Synthetic Diversity,a17,Deter,e2
+Adaptive Response,t1,Adaptive Management,a3,Deter,e2
+Deception,t4,Tainting,a14,Reveal,e20
+Analytic Monitoring,t2,Forensic and Behavioral Analysis,a6,Reveal,e20
+Realignment,t10,Purposing,a35,No Effect,e21
+Deception,t4,Disinformation,a12,Divert,e3
+Deception,t4,Misdirection,a13,Divert,e3
+Deception,t4,Disinformation,a12,Deceive,e4
+Deception,t4,Misdirection,a13,Deceive,e4
+Deception,t4,Tainting,a14,Deceive,e4
+Adaptive Response,t1,Dynamic Resource Allocation,a2,Expunge,e6
+Non-Persistence,t8,Non-Persistent Information,a29,Expunge,e6
+Adaptive Response,t1,Adaptive Management,a3,Expunge,e6
+Non-Persistence,t8,Non-Persistent Services,a30,Expunge,e6
+Non-Persistence,t8,Non-Persistent Connectivity,a31,Expunge,e6
+Realignment,t10,Replacement,a38,Expunge,e6
+Realignment,t10,Evolvability,a52,Expunge,e6
+Adaptive Response,t1,Dynamic Reconfiguration,a1,Preempt,e7
+Deception,t4,Obfuscation,a11,Preempt,e7
+Deception,t4,Disinformation,a12,Preempt,e7
+Deception,t4,Misdirection,a13,Preempt,e7
+Deception,t4,Tainting,a14,Preempt,e7
+Diversity,t5,Architectural Diversity,a15,Preempt,e7
+Diversity,t5,Design Diversity,a16,Preempt,e7
+Diversity,t5,Synthetic Diversity,a17,Preempt,e7
+Diversity,t5,Information Diversity,a18,Preempt,e7
+Diversity,t5,Path Diversity,a19,Preempt,e7
+Dynamic Positioning,t6,Functional Relocation of Cyber Resources,a22,Preempt,e7
+Dynamic Positioning,t6,Asset Mobility,a23,Preempt,e7
+Non-Persistence,t8,Non-Persistent Information,a29,Preempt,e7
+Adaptive Response,t1,Adaptive Management,a3,Preempt,e7
+Non-Persistence,t8,Non-Persistent Services,a30,Preempt,e7
+Non-Persistence,t8,Non-Persistent Connectivity,a31,Preempt,e7
+Privilege Restriction,t9,Trust-Based Privilege Management,a32,Preempt,e7
+Privilege Restriction,t9,Attribute-Based Usage Restriction,a33,Preempt,e7
+Privilege Restriction,t9,Dynamic Privileges,a34,Preempt,e7
+Realignment,t10,Offloading,a36,Preempt,e7
+Realignment,t10,Restriction,a37,Preempt,e7
+Realignment,t10,Replacement,a38,Preempt,e7
+Realignment,t10,Specialization,a39,Preempt,e7
+Redundancy,t11,Replication,a42,Preempt,e7
+Segmentation,t12,Predefined Segmentation,a43,Preempt,e7
+Segmentation,t12,Dynamic Segmentation and Isolation,a44,Preempt,e7
+Unpredictability,t14,Temporal Unpredictability,a48,Preempt,e7
+Unpredictability,t14,Contextual Unpredictability,a49,Preempt,e7
+Realignment,t10,Evolvability,a52,Preempt,e7
+Coordinated Protection,t3,Calibrated Defense-in-Depth,a7,Preempt,e7
+Adaptive Response,t1,Dynamic Reconfiguration,a1,Negate,e8
+Deception,t4,Obfuscation,a11,Negate,e8
+Deception,t4,Disinformation,a12,Negate,e8
+Deception,t4,Misdirection,a13,Negate,e8
+Diversity,t5,Synthetic Diversity,a17,Negate,e8
+Diversity,t5,Information Diversity,a18,Negate,e8
+Diversity,t5,Path Diversity,a19,Negate,e8
+Dynamic Positioning,t6,Functional Relocation of Cyber Resources,a22,Negate,e8
+Dynamic Positioning,t6,Asset Mobility,a23,Negate,e8
+Adaptive Response,t1,Adaptive Management,a3,Negate,e8
+Non-Persistence,t8,Non-Persistent Services,a30,Negate,e8
+Privilege Restriction,t9,Trust-Based Privilege Management,a32,Negate,e8
+Privilege Restriction,t9,Attribute-Based Usage Restriction,a33,Negate,e8
+Privilege Restriction,t9,Dynamic Privileges,a34,Negate,e8
+Realignment,t10,Offloading,a36,Negate,e8
+Realignment,t10,Restriction,a37,Negate,e8
+Realignment,t10,Replacement,a38,Negate,e8
+Realignment,t10,Specialization,a39,Negate,e8
+Segmentation,t12,Predefined Segmentation,a43,Negate,e8
+Segmentation,t12,Dynamic Segmentation and Isolation,a44,Negate,e8
+Substantiated Integrity,t13,Integrity Checks,a45,Negate,e8
+Unpredictability,t14,Contextual Unpredictability,a49,Negate,e8
+Coordinated Protection,t3,Calibrated Defense-in-Depth,a7,Negate,e8

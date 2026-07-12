@@ -14,6 +14,7 @@
 *Detail exactly how an adversary could weaponize this issue, the specific TTPs they would use, and the potential business impact.*
 - **Exploitation Scenario:** {EXPLOITATION_SCENARIO}
 - **Potential Impact:** {BUSINESS_IMPACT}
+- **Mission-Level Attribute at Risk (CSA):** {CSA_NAME} — {CSA_IMPACT_SUMMARY}
 
 ---
 
@@ -51,7 +52,34 @@
 
 ---
 
-## 4. Technology Recommendations
+## 4. Long-Term Architectural Resiliency (CREF)
+
+*NIST SP 800-160 Vol. 2 Cyber Resiliency approaches that engineer around this class of threat rather than just blocking today's instance of it — what to build for tomorrow, not what to patch today.*
+
+### Resiliency Chain
+- **Goal:** {CREF_GOAL}
+- **Objective:** {CREF_OBJECTIVE}
+- **Technique:** {CREF_TECHNIQUE}
+- **Approach:** {CREF_APPROACH}
+- **Effect:** {CREF_EFFECT}
+
+### Architectural Recommendation
+*What to engineer, in plain terms, and why tactical controls (Sections 2-3) alone are insufficient here.*
+{CREF_RECOMMENDATION}
+
+---
+
+## 5. NIST SP 800-53 Compliance Mapping
+
+*Concrete controls a compliance reviewer can cite. Only list controls actually returned by the graph — state plainly if none exist for this finding.*
+
+- **Mitigation:** {CREF_MITIGATION_ID} - {CREF_MITIGATION_NAME}
+- **Satisfies Control(s):** {NIST_800_53_CONTROLS}
+- **Traceability:** {TRACEABILITY}
+
+---
+
+## 6. Technology Recommendations
 
 *Specific hardware, software, or configuration classes required to implement the ZIG capabilities and D3FEND countermeasures.*
 
@@ -62,7 +90,7 @@
 
 ---
 
-## 5. Plan of Action and Milestones (POA&M)
+## 7. Plan of Action and Milestones (POA&M)
 
 *Actionable steps for the engineering and security teams to resolve the gap.*
 

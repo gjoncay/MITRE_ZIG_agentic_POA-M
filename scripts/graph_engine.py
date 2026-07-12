@@ -54,8 +54,11 @@ class KnowledgeGraphEngine:
             self.semantic_enabled = False
 
     def load_data(self):
+        # Order matters: cref_edges.csv references node IDs defined in the mitre and
+        # zig files (attack_technique, zig_activity), so it must load last.
         for nodes_file, edges_file in [('mitre_nodes.csv', 'mitre_edges.csv'),
-                                       ('zig_nodes.csv', 'zig_edges.csv')]:
+                                       ('zig_nodes.csv', 'zig_edges.csv'),
+                                       ('cref_nodes.csv', 'cref_edges.csv')]:
             try:
                 with open(os.path.join(BASE_DIR, nodes_file), 'r', encoding='utf-8') as f:
                     for row in csv.DictReader(f):

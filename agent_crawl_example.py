@@ -52,6 +52,27 @@ if __name__ == "__main__":
         zig_subgraph = engine.crawl_subgraph(zig_node_id, depth=2)
         print(format_subgraph(zig_subgraph))
         
+    print("\n[Agent] Checking the same MITRE subgraph for direct CREF/ZIG-activity/NIST edges...")
+    # These are the new edges added by consolidate_cref_data.py: a zig_activity or
+    # cref_approach can point straight at the ATT&CK technique with 'mitigates' /
+    # 'mitigates_architecturally', no keyword matching required.
+    if mitre_results:
+        for edge in mitre_subgraph.get('edges', []):
+            if edge['target'] != mitre_node_id:
+                continue
+            src_data = mitre_subgraph['nodes'].get(edge['source'], {})
+            src_type = src_data.get('type')
+            if src_type == 'zig_activity':
+                print(f"  - Direct ZIG Activity: [{edge['source']}] {src_data.get('name')} --mitigates--> {mitre_node_id}")
+            elif src_type == 'cref_approach':
+                print(f"  - CREF Approach: [{edge['source']}] {src_data.get('name')} --mitigates_architecturally--> {mitre_node_id}")
+            elif src_type == 'cref_mitigation':
+                print(f"  - CREF/NIST Mitigation: [{edge['source']}] {src_data.get('name')} --mitigates--> {mitre_node_id}")
+                for _, v, data in engine.graph.out_edges(edge['source'], data=True):
+                    if data.get('relationship') == 'satisfies_control':
+                        control_node = engine.query_node(v)
+                        print(f"      satisfies_control --> [{v}] (NIST SP 800-53)")
+
     print("\n" + "="*50)
     print("FINAL ASSESSMENT OUTPUT (MARKDOWN TEMPLATE FORMAT)")
     print("="*50 + "\n")
@@ -108,7 +129,31 @@ if __name__ == "__main__":
 
 ---
 
-## 4. Technology Recommendations
+## 4. Long-Term Architectural Resiliency (CREF)
+
+### Resiliency Chain
+- **Goal:** Withstand
+- **Objective:** Limit Damage
+- **Technique:** Privilege Restriction
+- **Approach:** Attribute-Based Usage Restriction
+- **Effect:** Limit
+
+### Architectural Recommendation
+Because forged tickets bypass password-based tactical controls entirely, engineer for
+attribute-based usage restriction (limit the mission's blast radius) rather than relying
+solely on credential rotation.
+
+---
+
+## 5. NIST SP 800-53 Compliance Mapping
+
+- **Mitigation:** CM1164 - Calibrate Administrative Access
+- **Satisfies Control(s):** AC-6(1), AC-6(5)
+- **Traceability:** Implements CREF Approach a33 / ZIG Activity 1.2.1
+
+---
+
+## 6. Technology Recommendations
 
 - **Recommended Technologies:**
   - ZIG-TECH-54 - Identity Governance and Administration (IGA)
@@ -117,7 +162,7 @@ if __name__ == "__main__":
 
 ---
 
-## 5. Plan of Action and Milestones (POA&M)
+## 7. Plan of Action and Milestones (POA&M)
 
 - [ ] **Phase 1 (Immediate):** Identify and rotate all potentially compromised service account passwords (krbtgt).
 - [ ] **Phase 2 (Short-Term):** Deploy robust Identity Governance and Administration (IGA) tools for continuous monitoring.

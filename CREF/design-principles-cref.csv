@@ -1,0 +1,183 @@
+strategic_design_principle,strategic_design_principle_id,structural_design_principle,structural_design_principle_id,cref_technique_id,technique,required
+Reduce attack surfaces,sta3,Limit the need for trust,stu1,t10,Realignment,1
+Reduce attack surfaces,sta3,Limit the need for trust,stu1,t13,Substantiated Integrity,0
+Reduce attack surfaces,sta3,Limit the need for trust,stu1,t3,Coordinated Protection,0
+Reduce attack surfaces,sta3,Limit the need for trust,stu1,t9,Privilege Restriction,1
+Assume compromised resources,sta4,Limit the need for trust,stu1,t10,Realignment,1
+Assume compromised resources,sta4,Limit the need for trust,stu1,t13,Substantiated Integrity,0
+Assume compromised resources,sta4,Limit the need for trust,stu1,t3,Coordinated Protection,0
+Assume compromised resources,sta4,Limit the need for trust,stu1,t9,Privilege Restriction,1
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t1,Adaptive Response,1
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t10,Realignment,0
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t11,Redundancy,0
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t12,Segmentation,0
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t14,Unpredictability,0
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t3,Coordinated Protection,0
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t4,Deception,0
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t6,Dynamic Positioning,0
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t8,Non-Persistence,0
+Focus on common critical assets,sta1,Manage resources (risk-) adaptively,stu10,t9,Privilege Restriction,0
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t1,Adaptive Response,1
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t10,Realignment,0
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t11,Redundancy,0
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t12,Segmentation,0
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t14,Unpredictability,0
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t3,Coordinated Protection,0
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t4,Deception,0
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t6,Dynamic Positioning,0
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t8,Non-Persistence,0
+Support agility and architect for adaptability,sta2,Manage resources (risk-) adaptively,stu10,t9,Privilege Restriction,0
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t1,Adaptive Response,1
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t10,Realignment,0
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t11,Redundancy,0
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t12,Segmentation,0
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t14,Unpredictability,0
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t3,Coordinated Protection,0
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t4,Deception,0
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t6,Dynamic Positioning,0
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t8,Non-Persistence,0
+Expect adversaries to evolve,sta5,Manage resources (risk-) adaptively,stu10,t9,Privilege Restriction,0
+Reduce attack surfaces,sta3,Maximize transience,stu11,t13,Substantiated Integrity,0
+Reduce attack surfaces,sta3,Maximize transience,stu11,t14,Unpredictability,0
+Reduce attack surfaces,sta3,Maximize transience,stu11,t2,Analytic Monitoring,0
+Reduce attack surfaces,sta3,Maximize transience,stu11,t6,Dynamic Positioning,0
+Reduce attack surfaces,sta3,Maximize transience,stu11,t8,Non-Persistence,1
+Assume compromised resources,sta4,Maximize transience,stu11,t13,Substantiated Integrity,0
+Assume compromised resources,sta4,Maximize transience,stu11,t14,Unpredictability,0
+Assume compromised resources,sta4,Maximize transience,stu11,t2,Analytic Monitoring,0
+Assume compromised resources,sta4,Maximize transience,stu11,t6,Dynamic Positioning,0
+Assume compromised resources,sta4,Maximize transience,stu11,t8,Non-Persistence,1
+Expect adversaries to evolve,sta5,Maximize transience,stu11,t13,Substantiated Integrity,0
+Expect adversaries to evolve,sta5,Maximize transience,stu11,t14,Unpredictability,0
+Expect adversaries to evolve,sta5,Maximize transience,stu11,t2,Analytic Monitoring,0
+Expect adversaries to evolve,sta5,Maximize transience,stu11,t6,Dynamic Positioning,0
+Expect adversaries to evolve,sta5,Maximize transience,stu11,t8,Non-Persistence,1
+Focus on common critical assets,sta1,Determine ongoing trustworthiness,stu12,t13,Substantiated Integrity,1
+Focus on common critical assets,sta1,Determine ongoing trustworthiness,stu12,t3,Coordinated Protection,0
+Assume compromised resources,sta4,Determine ongoing trustworthiness,stu12,t13,Substantiated Integrity,1
+Assume compromised resources,sta4,Determine ongoing trustworthiness,stu12,t3,Coordinated Protection,0
+Expect adversaries to evolve,sta5,Determine ongoing trustworthiness,stu12,t13,Substantiated Integrity,1
+Expect adversaries to evolve,sta5,Determine ongoing trustworthiness,stu12,t3,Coordinated Protection,0
+Reduce attack surfaces,sta3,Change or disrupt the attack surface,stu13,t1,Adaptive Response,0
+Reduce attack surfaces,sta3,Change or disrupt the attack surface,stu13,t14,Unpredictability,0
+Reduce attack surfaces,sta3,Change or disrupt the attack surface,stu13,t4,Deception,0
+Reduce attack surfaces,sta3,Change or disrupt the attack surface,stu13,t5,Diversity,0
+Reduce attack surfaces,sta3,Change or disrupt the attack surface,stu13,t6,Dynamic Positioning,1
+Reduce attack surfaces,sta3,Change or disrupt the attack surface,stu13,t8,Non-Persistence,1
+Assume compromised resources,sta4,Change or disrupt the attack surface,stu13,t1,Adaptive Response,0
+Assume compromised resources,sta4,Change or disrupt the attack surface,stu13,t14,Unpredictability,0
+Assume compromised resources,sta4,Change or disrupt the attack surface,stu13,t4,Deception,0
+Assume compromised resources,sta4,Change or disrupt the attack surface,stu13,t5,Diversity,0
+Assume compromised resources,sta4,Change or disrupt the attack surface,stu13,t6,Dynamic Positioning,1
+Assume compromised resources,sta4,Change or disrupt the attack surface,stu13,t8,Non-Persistence,1
+Expect adversaries to evolve,sta5,Change or disrupt the attack surface,stu13,t1,Adaptive Response,0
+Expect adversaries to evolve,sta5,Change or disrupt the attack surface,stu13,t14,Unpredictability,0
+Expect adversaries to evolve,sta5,Change or disrupt the attack surface,stu13,t4,Deception,0
+Expect adversaries to evolve,sta5,Change or disrupt the attack surface,stu13,t5,Diversity,0
+Expect adversaries to evolve,sta5,Change or disrupt the attack surface,stu13,t6,Dynamic Positioning,1
+Expect adversaries to evolve,sta5,Change or disrupt the attack surface,stu13,t8,Non-Persistence,1
+Support agility and architect for adaptability,sta2,Make the effects of deception and unpredictability user- transparent,stu14,t1,Adaptive Response,0
+Support agility and architect for adaptability,sta2,Make the effects of deception and unpredictability user- transparent,stu14,t14,Unpredictability,0
+Support agility and architect for adaptability,sta2,Make the effects of deception and unpredictability user- transparent,stu14,t3,Coordinated Protection,1
+Support agility and architect for adaptability,sta2,Make the effects of deception and unpredictability user- transparent,stu14,t4,Deception,0
+Reduce attack surfaces,sta3,Make the effects of deception and unpredictability user- transparent,stu14,t1,Adaptive Response,0
+Reduce attack surfaces,sta3,Make the effects of deception and unpredictability user- transparent,stu14,t14,Unpredictability,0
+Reduce attack surfaces,sta3,Make the effects of deception and unpredictability user- transparent,stu14,t3,Coordinated Protection,1
+Reduce attack surfaces,sta3,Make the effects of deception and unpredictability user- transparent,stu14,t4,Deception,0
+Focus on common critical assets,sta1,Control visibility and use,stu2,t12,Segmentation,1
+Focus on common critical assets,sta1,Control visibility and use,stu2,t4,Deception,0
+Focus on common critical assets,sta1,Control visibility and use,stu2,t8,Non-Persistence,0
+Focus on common critical assets,sta1,Control visibility and use,stu2,t9,Privilege Restriction,1
+Reduce attack surfaces,sta3,Control visibility and use,stu2,t12,Segmentation,1
+Reduce attack surfaces,sta3,Control visibility and use,stu2,t4,Deception,0
+Reduce attack surfaces,sta3,Control visibility and use,stu2,t8,Non-Persistence,0
+Reduce attack surfaces,sta3,Control visibility and use,stu2,t9,Privilege Restriction,1
+Assume compromised resources,sta4,Control visibility and use,stu2,t12,Segmentation,1
+Assume compromised resources,sta4,Control visibility and use,stu2,t4,Deception,0
+Assume compromised resources,sta4,Control visibility and use,stu2,t8,Non-Persistence,0
+Assume compromised resources,sta4,Control visibility and use,stu2,t9,Privilege Restriction,1
+Focus on common critical assets,sta1,Contain and exclude behaviors,stu3,t12,Segmentation,1
+Focus on common critical assets,sta1,Contain and exclude behaviors,stu3,t13,Substantiated Integrity,0
+Focus on common critical assets,sta1,Contain and exclude behaviors,stu3,t2,Analytic Monitoring,0
+Focus on common critical assets,sta1,Contain and exclude behaviors,stu3,t5,Diversity,0
+Focus on common critical assets,sta1,Contain and exclude behaviors,stu3,t8,Non-Persistence,0
+Focus on common critical assets,sta1,Contain and exclude behaviors,stu3,t9,Privilege Restriction,1
+Assume compromised resources,sta4,Contain and exclude behaviors,stu3,t12,Segmentation,1
+Assume compromised resources,sta4,Contain and exclude behaviors,stu3,t13,Substantiated Integrity,0
+Assume compromised resources,sta4,Contain and exclude behaviors,stu3,t2,Analytic Monitoring,0
+Assume compromised resources,sta4,Contain and exclude behaviors,stu3,t5,Diversity,0
+Assume compromised resources,sta4,Contain and exclude behaviors,stu3,t8,Non-Persistence,0
+Assume compromised resources,sta4,Contain and exclude behaviors,stu3,t9,Privilege Restriction,1
+Expect adversaries to evolve,sta5,Contain and exclude behaviors,stu3,t12,Segmentation,1
+Expect adversaries to evolve,sta5,Contain and exclude behaviors,stu3,t13,Substantiated Integrity,0
+Expect adversaries to evolve,sta5,Contain and exclude behaviors,stu3,t2,Analytic Monitoring,0
+Expect adversaries to evolve,sta5,Contain and exclude behaviors,stu3,t5,Diversity,0
+Expect adversaries to evolve,sta5,Contain and exclude behaviors,stu3,t8,Non-Persistence,0
+Expect adversaries to evolve,sta5,Contain and exclude behaviors,stu3,t9,Privilege Restriction,1
+Focus on common critical assets,sta1,Layer defenses and partition resources,stu4,t11,Redundancy,0
+Focus on common critical assets,sta1,Layer defenses and partition resources,stu4,t12,Segmentation,1
+Focus on common critical assets,sta1,Layer defenses and partition resources,stu4,t2,Analytic Monitoring,0
+Focus on common critical assets,sta1,Layer defenses and partition resources,stu4,t3,Coordinated Protection,1
+Focus on common critical assets,sta1,Layer defenses and partition resources,stu4,t5,Diversity,0
+Focus on common critical assets,sta1,Layer defenses and partition resources,stu4,t6,Dynamic Positioning,0
+Assume compromised resources,sta4,Layer defenses and partition resources,stu4,t11,Redundancy,0
+Assume compromised resources,sta4,Layer defenses and partition resources,stu4,t12,Segmentation,1
+Assume compromised resources,sta4,Layer defenses and partition resources,stu4,t2,Analytic Monitoring,0
+Assume compromised resources,sta4,Layer defenses and partition resources,stu4,t3,Coordinated Protection,1
+Assume compromised resources,sta4,Layer defenses and partition resources,stu4,t5,Diversity,0
+Assume compromised resources,sta4,Layer defenses and partition resources,stu4,t6,Dynamic Positioning,0
+Focus on common critical assets,sta1,Plan and manage diversity,stu5,t11,Redundancy,0
+Focus on common critical assets,sta1,Plan and manage diversity,stu5,t3,Coordinated Protection,0
+Focus on common critical assets,sta1,Plan and manage diversity,stu5,t5,Diversity,1
+Support agility and architect for adaptability,sta2,Plan and manage diversity,stu5,t11,Redundancy,0
+Support agility and architect for adaptability,sta2,Plan and manage diversity,stu5,t3,Coordinated Protection,0
+Support agility and architect for adaptability,sta2,Plan and manage diversity,stu5,t5,Diversity,1
+Assume compromised resources,sta4,Plan and manage diversity,stu5,t11,Redundancy,0
+Assume compromised resources,sta4,Plan and manage diversity,stu5,t3,Coordinated Protection,0
+Assume compromised resources,sta4,Plan and manage diversity,stu5,t5,Diversity,1
+Focus on common critical assets,sta1,Maintain redundancy,stu6,t10,Realignment,0
+Focus on common critical assets,sta1,Maintain redundancy,stu6,t11,Redundancy,1
+Focus on common critical assets,sta1,Maintain redundancy,stu6,t3,Coordinated Protection,0
+Focus on common critical assets,sta1,Maintain redundancy,stu6,t5,Diversity,0
+Support agility and architect for adaptability,sta2,Maintain redundancy,stu6,t10,Realignment,0
+Support agility and architect for adaptability,sta2,Maintain redundancy,stu6,t11,Redundancy,1
+Support agility and architect for adaptability,sta2,Maintain redundancy,stu6,t3,Coordinated Protection,0
+Support agility and architect for adaptability,sta2,Maintain redundancy,stu6,t5,Diversity,0
+Assume compromised resources,sta4,Maintain redundancy,stu6,t10,Realignment,0
+Assume compromised resources,sta4,Maintain redundancy,stu6,t11,Redundancy,1
+Assume compromised resources,sta4,Maintain redundancy,stu6,t3,Coordinated Protection,0
+Assume compromised resources,sta4,Maintain redundancy,stu6,t5,Diversity,0
+Focus on common critical assets,sta1,Make resources location-versatile,stu7,t1,Adaptive Response,0
+Focus on common critical assets,sta1,Make resources location-versatile,stu7,t11,Redundancy,0
+Focus on common critical assets,sta1,Make resources location-versatile,stu7,t14,Unpredictability,0
+Focus on common critical assets,sta1,Make resources location-versatile,stu7,t5,Diversity,0
+Focus on common critical assets,sta1,Make resources location-versatile,stu7,t6,Dynamic Positioning,1
+Focus on common critical assets,sta1,Make resources location-versatile,stu7,t8,Non-Persistence,0
+Support agility and architect for adaptability,sta2,Make resources location-versatile,stu7,t1,Adaptive Response,0
+Support agility and architect for adaptability,sta2,Make resources location-versatile,stu7,t11,Redundancy,0
+Support agility and architect for adaptability,sta2,Make resources location-versatile,stu7,t14,Unpredictability,0
+Support agility and architect for adaptability,sta2,Make resources location-versatile,stu7,t5,Diversity,0
+Support agility and architect for adaptability,sta2,Make resources location-versatile,stu7,t6,Dynamic Positioning,1
+Support agility and architect for adaptability,sta2,Make resources location-versatile,stu7,t8,Non-Persistence,0
+Expect adversaries to evolve,sta5,Make resources location-versatile,stu7,t1,Adaptive Response,0
+Expect adversaries to evolve,sta5,Make resources location-versatile,stu7,t11,Redundancy,0
+Expect adversaries to evolve,sta5,Make resources location-versatile,stu7,t14,Unpredictability,0
+Expect adversaries to evolve,sta5,Make resources location-versatile,stu7,t5,Diversity,0
+Expect adversaries to evolve,sta5,Make resources location-versatile,stu7,t6,Dynamic Positioning,1
+Expect adversaries to evolve,sta5,Make resources location-versatile,stu7,t8,Non-Persistence,0
+Focus on common critical assets,sta1,Leverage health and status data,stu8,t13,Substantiated Integrity,0
+Focus on common critical assets,sta1,Leverage health and status data,stu8,t2,Analytic Monitoring,1
+Focus on common critical assets,sta1,Leverage health and status data,stu8,t7,Contextual Awareness,1
+Support agility and architect for adaptability,sta2,Leverage health and status data,stu8,t13,Substantiated Integrity,0
+Support agility and architect for adaptability,sta2,Leverage health and status data,stu8,t2,Analytic Monitoring,1
+Support agility and architect for adaptability,sta2,Leverage health and status data,stu8,t7,Contextual Awareness,1
+Assume compromised resources,sta4,Leverage health and status data,stu8,t13,Substantiated Integrity,0
+Assume compromised resources,sta4,Leverage health and status data,stu8,t2,Analytic Monitoring,1
+Assume compromised resources,sta4,Leverage health and status data,stu8,t7,Contextual Awareness,1
+Expect adversaries to evolve,sta5,Leverage health and status data,stu8,t13,Substantiated Integrity,0
+Expect adversaries to evolve,sta5,Leverage health and status data,stu8,t2,Analytic Monitoring,1
+Expect adversaries to evolve,sta5,Leverage health and status data,stu8,t7,Contextual Awareness,1
+Focus on common critical assets,sta1,Maintain situational awareness,stu9,t2,Analytic Monitoring,0
+Focus on common critical assets,sta1,Maintain situational awareness,stu9,t7,Contextual Awareness,1
+Expect adversaries to evolve,sta5,Maintain situational awareness,stu9,t2,Analytic Monitoring,0
+Expect adversaries to evolve,sta5,Maintain situational awareness,stu9,t7,Contextual Awareness,1

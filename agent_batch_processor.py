@@ -78,6 +78,10 @@ def generate_reports(input_csv, limit):
         analytics = []
         mitigations = []
 
+        zig_activities_direct = []
+        cref_approaches = []
+        cref_mitigations = []
+
         if mitre_subgraph and 'nodes' in mitre_subgraph:
             for nid, ndata in mitre_subgraph['nodes'].items():
                 ntype = ndata.get('type')
@@ -90,6 +94,20 @@ def generate_reports(input_csv, limit):
                 elif ntype == 'attack_mitigation':
                     mitigations.append(f"[{nid}] {ndata.get('name', 'Mitigation')}")
 
+            # Direct ZIG-activity / CREF-approach / CREF-mitigation edges that target
+            # this technique (relationship_type 'mitigates' / 'mitigates_architecturally').
+            for edge in mitre_subgraph.get('edges', []):
+                if edge.get('target') != mitre_node_id:
+                    continue
+                src_data = mitre_subgraph['nodes'].get(edge['source'], {})
+                src_type = src_data.get('type')
+                if src_type == 'zig_activity' and edge.get('relationship') == 'mitigates':
+                    zig_activities_direct.append((edge['source'], src_data))
+                elif src_type == 'cref_approach' and edge.get('relationship') == 'mitigates_architecturally':
+                    cref_approaches.append((edge['source'], src_data))
+                elif src_type == 'cref_mitigation' and edge.get('relationship') == 'mitigates':
+                    cref_mitigations.append((edge['source'], src_data))
+
         d3fend_cm_1 = d3fend_countermeasures[0] if len(d3fend_countermeasures) > 0 else "None found in graph"
         d3fend_cm_2 = d3fend_countermeasures[1] if len(d3fend_countermeasures) > 1 else "None found in graph"
         d3fend_art_str = ", ".join(d3fend_artifacts[:3]) if d3fend_artifacts else "None found in graph"
@@ -97,33 +115,115 @@ def generate_reports(input_csv, limit):
         mitre_mitigations_str = ("\n  - " + "\n  - ".join(mitigations[:2])) if mitigations else "None specified"
 
         # 3. Zero Trust (ZIG) Correlation
-        # Rank ZIG nodes against the top countermeasure NAME (not its "[ID] Name" string)
-        if d3fend_countermeasures:
-            search_term = d3fend_countermeasures[0].split('] ', 1)[-1]
+        # Prefer the direct zig_activity -> attack_technique edge (sourced from the
+        # DoD Zero Trust Strategy activity-level crosswalk) over keyword matching.
+        zig_activity_id = zig_cap_id = "None found"
+        zig_activity_name = zig_cap_name = "No matching ZIG activity"
+        zig_techs = []
+
+        if zig_activities_direct:
+            zig_activity_id, zig_activity_data = zig_activities_direct[0]
+            zig_activity_name = zig_activity_data.get('name', zig_activity_id)
+            for u, v, data in engine.graph.out_edges(zig_activity_id, data=True):
+                if data.get('relationship') == 'belongs_to_capability':
+                    cap_node = engine.query_node(v)
+                    zig_cap_id, zig_cap_name = v, (cap_node.get('name', v) if cap_node else v)
+                    break
         else:
-            search_term = "Access Control"
+            # Fallback: the ZT crosswalk doesn't cover every technique yet. Rank ZIG
+            # nodes against the top countermeasure NAME (not its "[ID] Name" string).
+            search_term = d3fend_countermeasures[0].split('] ', 1)[-1] if d3fend_countermeasures else "Access Control"
+            zig_ranked = engine.keyword_rank(search_term, top_k=100)
+            zig_caps = [(n, d) for n, d, s in zig_ranked if d.get('type') == 'zig_capability']
+            zig_techs = [(n, d) for n, d, s in zig_ranked if d.get('type') == 'zig_technology']
 
-        zig_ranked = engine.keyword_rank(search_term, top_k=100)
-        zig_caps = [(n, d) for n, d, s in zig_ranked if d.get('type') == 'zig_capability']
-        zig_techs = [(n, d) for n, d, s in zig_ranked if d.get('type') == 'zig_technology']
+            if not zig_caps:
+                fallback_ranked = engine.keyword_rank("access management authentication", top_k=100)
+                zig_caps = [(n, d) for n, d, s in fallback_ranked if d.get('type') == 'zig_capability']
+                if not zig_techs:
+                    zig_techs = [(n, d) for n, d, s in fallback_ranked if d.get('type') == 'zig_technology']
 
-        # Fall back to a generic security term if the countermeasure name found nothing
-        if not zig_caps:
-            fallback_ranked = engine.keyword_rank("access management authentication", top_k=100)
-            zig_caps = [(n, d) for n, d, s in fallback_ranked if d.get('type') == 'zig_capability']
-            if not zig_techs:
-                zig_techs = [(n, d) for n, d, s in fallback_ranked if d.get('type') == 'zig_technology']
-
-        zig_cap_id = zig_caps[0][0] if zig_caps else "None found"
-        zig_cap_name = zig_caps[0][1].get('name', 'Unknown') if zig_caps else "No matching ZIG capability"
+            if zig_caps:
+                zig_cap_id, zig_cap_name = zig_caps[0][0], zig_caps[0][1].get('name', 'Unknown')
 
         # Resolve the capability's pillar from the graph instead of hardcoding it
         zig_pillar = "Unknown Pillar"
-        if zig_caps:
+        if zig_cap_id != "None found":
             for u, v, data in engine.graph.out_edges(zig_cap_id, data=True):
                 if data.get('relationship') == 'belongs_to_pillar':
                     pillar_node = engine.query_node(v)
                     zig_pillar = pillar_node.get('name', v) if pillar_node else v
+                    break
+
+        # 4. CREF Architectural Resiliency: walk the first approach up
+        # Approach -> Technique -> Objective -> Goal, plus its Effect.
+        cref_goal = cref_objective = cref_technique_name = cref_approach_name = cref_effect = "None found in graph"
+        cref_approach_id = "None"
+        cref_technique_id_found = None
+        if cref_approaches:
+            cref_approach_id, cref_approach_data = cref_approaches[0]
+            cref_approach_name = cref_approach_data.get('name', cref_approach_id)
+            for u, v, data in engine.graph.out_edges(cref_approach_id, data=True):
+                rel = data.get('relationship')
+                if rel == 'realizes_technique':
+                    cref_technique_id_found = v
+                    tech_node = engine.query_node(v)
+                    cref_technique_name = tech_node.get('name', v) if tech_node else v
+                elif rel == 'has_effect':
+                    eff_node = engine.query_node(v)
+                    cref_effect = eff_node.get('name', v) if eff_node else v
+            if cref_technique_id_found:
+                for u, v, data in engine.graph.out_edges(cref_technique_id_found, data=True):
+                    rel = data.get('relationship')
+                    if rel == 'achieves_objective':
+                        obj_node = engine.query_node(v)
+                        cref_objective = obj_node.get('name', v) if obj_node else v
+                        for _, gv, gdata in engine.graph.out_edges(v, data=True):
+                            if gdata.get('relationship') == 'serves_goal':
+                                goal_node = engine.query_node(gv)
+                                cref_goal = goal_node.get('name', gv) if goal_node else gv
+                                break
+
+        cref_recommendation = (
+            f"Because {mitre_name} can recur in forms tactical controls won't catch, "
+            f"engineer for {cref_approach_name.lower()} ({cref_goal.lower()} the mission) "
+            f"rather than relying solely on the Section 2-3 tactical blockers."
+            if cref_approaches else
+            "No CREF architectural approach mapped to this technique in the graph; "
+            "tactical controls (Sections 2-3) are the primary mitigation for this finding."
+        )
+
+        # 5. NIST SP 800-53 Compliance Mapping, from the first cref_mitigation found.
+        cref_mitigation_id = "None found in graph"
+        cref_mitigation_name = "No matching CREF/ATT&CK mitigation with a control mapping"
+        nist_controls = []
+        zig_activity_id_from_mitigation = None
+        if cref_mitigations:
+            cref_mitigation_id, cm_data = cref_mitigations[0]
+            cref_mitigation_name = cm_data.get('name', cref_mitigation_id)
+            for u, v, data in engine.graph.out_edges(cref_mitigation_id, data=True):
+                rel = data.get('relationship')
+                if rel == 'satisfies_control':
+                    nist_controls.append(v)
+                elif rel == 'implements_activity':
+                    zig_activity_id_from_mitigation = v
+        nist_controls_str = ", ".join(nist_controls) if nist_controls else "None mapped in graph"
+        traceability = (
+            f"Implements CREF Approach {cref_approach_id} / ZIG Activity {zig_activity_id_from_mitigation or zig_activity_id}"
+            if cref_mitigations else
+            "N/A — no CREF/ATT&CK mitigation mapped to this technique"
+        )
+
+        # 6. Cyber Survivability Attribute (CSA) impact, from the resolved CREF technique.
+        csa_name = "None found in graph"
+        csa_impact_summary = "No DoD Cyber Survivability Attribute mapped to this technique in the graph."
+        if cref_technique_id_found:
+            for u, v, data in engine.graph.in_edges(cref_technique_id_found, data=True):
+                if data.get('relationship') == 'associated_with_technique':
+                    csa_node = engine.query_node(u)
+                    if csa_node:
+                        csa_name = csa_node.get('name', u)
+                        csa_impact_summary = f"This finding threatens the ability to {csa_name.lower()}."
                     break
 
         # AI generated "So What" logic (mocked up based on finding keywords).
@@ -158,16 +258,29 @@ def generate_reports(input_csv, limit):
             D3FEND_COUNTERMEASURE_1=d3fend_cm_1,
             D3FEND_COUNTERMEASURE_2=d3fend_cm_2,
             D3FEND_ARTIFACTS=d3fend_art_str,
+            CSA_NAME=csa_name,
+            CSA_IMPACT_SUMMARY=csa_impact_summary,
             ZIG_PILLAR_NAME=zig_pillar,
             ZIG_CAPABILITY_ID=zig_cap_id,
             ZIG_CAPABILITY_NAME=zig_cap_name,
-            ZIG_ACTIVITY_1="Identify and remediate vulnerable configurations",
+            ZIG_ACTIVITY_1=f"[{zig_activity_id}] {zig_activity_name}" if zig_activities_direct else "Identify and remediate vulnerable configurations",
             ZIG_TECHNOLOGY_1=f"[{zig_techs[0][0]}] {zig_techs[0][1].get('name')}" if len(zig_techs) > 0 else "None found in graph",
             ZIG_TECHNOLOGY_2=f"[{zig_techs[1][0]}] {zig_techs[1][1].get('name')}" if len(zig_techs) > 1 else "None found in graph",
+            CREF_GOAL=cref_goal,
+            CREF_OBJECTIVE=cref_objective,
+            CREF_TECHNIQUE=cref_technique_name,
+            CREF_APPROACH=cref_approach_name,
+            CREF_APPROACH_ID=cref_approach_id,
+            CREF_EFFECT=cref_effect,
+            CREF_RECOMMENDATION=cref_recommendation,
+            CREF_MITIGATION_ID=cref_mitigation_id,
+            CREF_MITIGATION_NAME=cref_mitigation_name,
+            NIST_800_53_CONTROLS=nist_controls_str,
+            TRACEABILITY=traceability,
             TECHNOLOGY_IMPLEMENTATION_NOTES="Ensure configurations align with vendor security baselines.",
             IMMEDIATE_ACTION=imm_action,
             SHORT_TERM_ACTION="Implement continuous monitoring for this vulnerability class.",
-            LONG_TERM_ACTION=f"Integrate {zig_cap_name} architecture fully."
+            LONG_TERM_ACTION=f"Integrate {zig_cap_name} architecture fully; adopt {cref_approach_name} per Section 4." if cref_approaches else f"Integrate {zig_cap_name} architecture fully."
         )
 
         out_path = os.path.join(output_dir, f"ASMT-{index+1000}.md")
