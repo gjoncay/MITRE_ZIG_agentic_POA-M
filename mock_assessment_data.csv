@@ -1,11 +1,3 @@
 IP,Hostname,Finding,Severity
-192.168.1.15,DC-01.corp.local,"Active Directory: Kerberos Pre-Authentication disabled on service accounts (AS-REP Roasting vulnerability)",High
-192.168.1.15,DC-01.corp.local,"Active Directory: Domain Controller allows unconstrained delegation",High
-10.0.50.2,CORE-SW-01,"Cisco Discovery Protocol (CDP) enabled on untrusted external interfaces",Low
-10.0.50.5,EDGE-RTR-01,"Weak administrative password set ('admin123')",Critical
-192.168.10.45,HR-WKSTN-45,"Unrestricted SMB shares exposing sensitive employee data",Medium
-192.168.10.45,HR-WKSTN-45,"Local Administrator password is shared across all workstations (LAPS not implemented)",High
-172.16.5.100,WEB-SRV-PROD,"Web application vulnerable to unauthenticated remote code execution (RCE)",Critical
-172.16.5.101,DB-SRV-PROD,"Database listening on public interface without IP filtering",High
-192.168.20.10,VPN-GW-01,"VPN gateway allows connections without Multi-Factor Authentication (MFA)",High
-192.168.30.50,DEV-SERVER-02,"Cleartext protocols (Telnet, FTP) in use for remote administration",Medium
+192.168.1.15,DC-01,Kerberos Pre-Authentication disabled on service accounts,High
+10.0.50.5,EDGE-RTR-01,Weak administrative password set,Critical

@@ -18,3 +18,13 @@ sentence-transformers>=2.2   # pulls in torch (~2GB+); also requires the
 
 # TIER 4 — OPTIONAL, only for the Neo4j export path (import_to_neo4j.py)
 # neo4j>=5.0
+
+# TIER 5 — OPTIONAL, enables real LLM-drafted narratives via scripts/llm_providers.py.
+# LLM_PROVIDER=none (the default) needs neither of these and works with zero network
+# access. LLM_PROVIDER=local (an OpenAI-compatible endpoint, e.g. Ollama/LM Studio —
+# fine air-gapped, since it talks to a server on the local network, not the internet)
+# and LLM_PROVIDER=openai both need `openai`. LLM_PROVIDER=gemini needs
+# `google-generativeai` — this one always requires internet egress, so it is NOT
+# usable on an air-gapped network regardless of whether the package is installed.
+openai>=1.0
+google-generativeai>=0.5

@@ -120,9 +120,37 @@ def ingest_file(filepath):
         print(f"Successfully saved {len(embeddings)} embeddings to {npz_path}")
         print(f"Agents can now semantically search this raw dataset!")
 
+def ingest_text(text, output_csv="processed_assessment.csv"):
+    """Ingests a single pasted string of unstructured threat-intel text.
+
+    Writes a one-row CSV compatible with the same schema first_present() expects
+    elsewhere in this codebase (consolidate_findings.py / agent_batch_processor.py
+    look for columns named IP/Hostname/Finding/Severity among their candidate
+    lists), so freeform-pasted text can flow through the same downstream
+    pipeline as a spreadsheet-derived row.
+    """
+    MAX_FINDING_CHARS = 500
+
+    stripped = text.strip() if text else ""
+    finding_text = stripped if len(stripped) <= MAX_FINDING_CHARS else stripped[:MAX_FINDING_CHARS]
+
+    row_data = {
+        "_sheet": "pasted",
+        "IP": "N/A",
+        "Hostname": "N/A",
+        "Finding": finding_text,
+        "Severity": "Unknown",
+    }
+
+    flattened_df = pd.DataFrame([row_data])
+    flattened_df.to_csv(output_csv, index=False)
+    print(f"Saved pasted text as a single-row assessment to {output_csv}.")
+    return flattened_df
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest and optionally embed assessment reports (Excel/CSV)")
     parser.add_argument("filepath", help="Path to the .xlsx or .csv file")
     args = parser.parse_args()
-    
+
     ingest_file(args.filepath)
