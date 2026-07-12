@@ -115,6 +115,7 @@ def build_report_json(t_code, context, narrative, qa_result):
         "finding_count": finding_count,
         "severity_breakdown": context.get("severity_breakdown", {}),
         "affected_hosts": affected_hosts,  # full list, not capped
+        "is_hostless": _is_hostless(affected_hosts),  # True for CTI/adversary narrative input, no real asset data
 
         # D3FEND
         "d3fend_countermeasure_1": context.get("d3fend_countermeasure_1"),
@@ -164,16 +165,61 @@ def build_report_json(t_code, context, narrative, qa_result):
     }
 
 
+def _is_hostless(affected_hosts):
+    """True when NEITHER ip nor hostname is real for ANY row -- i.e. this
+    report came from CTI/threat-actor narrative text rather than a
+    network/vuln-scan finding tied to actual assets. Rendering an IP/Hostname
+    table full of "N/A" in that case is actively misleading (it implies asset
+    context that doesn't exist), so the caller uses a different table shape
+    and section label for this case.
+    """
+    if not affected_hosts:
+        return False
+    return all(
+        (h.get("ip") or "N/A") in ("N/A", "") and (h.get("hostname") or "N/A") in ("N/A", "")
+        for h in affected_hosts
+    )
+
+
+def _host_context_label(affected_hosts):
+    """Section label for {HOST_CONTEXT_LABEL} -- "Affected Hosts" only makes
+    sense when there's real asset data; otherwise this is CTI/adversary
+    narrative describing behavior, not a host inventory."""
+    return "Source Observations" if _is_hostless(affected_hosts) else "Affected Hosts"
+
+
 def _build_affected_hosts_table(context):
     """Render the {AFFECTED_HOSTS_TABLE} markdown table, capped for display.
 
     Full data always lives in build_report_json()'s uncapped affected_hosts
     list -- the cap here is purely about keeping the markdown report
-    readable.
+    readable. When every row is host-less (see _is_hostless), drops the
+    IP/Hostname columns entirely and dedupes identical excerpts instead of
+    repeating an "N/A | N/A" pair per row.
     """
     affected_hosts = context.get("affected_hosts", [])
     display_cap = context.get("_display_cap", 50)
     finding_count = context.get("finding_count", len(affected_hosts))
+
+    if _is_hostless(affected_hosts):
+        seen = []
+        for host in affected_hosts:
+            excerpt = host.get("finding", "N/A")
+            if excerpt not in seen:
+                seen.append(excerpt)
+        displayed = seen[:display_cap]
+
+        lines = ["| Source Excerpt | Severity |", "|---|---|"]
+        excerpt_to_severity = {h.get("finding", "N/A"): h.get("severity", "N/A") for h in affected_hosts}
+        for excerpt in displayed:
+            lines.append(f"| {excerpt} | {excerpt_to_severity.get(excerpt, 'N/A')} |")
+
+        if len(seen) > len(displayed):
+            remaining = len(seen) - len(displayed)
+            lines.append("")
+            lines.append(f"*...and {remaining} more excerpt(s) (see JSON for full list)*")
+
+        return "\n".join(lines)
 
     displayed = affected_hosts[:display_cap]
 
@@ -219,12 +265,14 @@ def render_markdown(
     affected_hosts_table = _build_affected_hosts_table(context)
     severity_breakdown_str = _build_severity_breakdown_str(context)
     finding_count = context.get("finding_count", len(context.get("affected_hosts", [])))
+    host_context_label = _host_context_label(context.get("affected_hosts", []))
 
     return template_str.format(
         DATE=generated_date,
         ASSESSMENT_ID=report_id,
         FINDING_COUNT=finding_count,
         SEVERITY_BREAKDOWN=severity_breakdown_str,
+        HOST_CONTEXT_LABEL=host_context_label,
         THREAT_INPUT_SUMMARY=narrative["threat_input_summary"],
         AFFECTED_HOSTS_TABLE=affected_hosts_table,
         EXPLOITATION_SCENARIO=narrative["exploitation_scenario"],

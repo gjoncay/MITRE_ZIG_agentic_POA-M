@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import json
 import argparse
 import pandas as pd
@@ -120,31 +121,68 @@ def ingest_file(filepath):
         print(f"Successfully saved {len(embeddings)} embeddings to {npz_path}")
         print(f"Agents can now semantically search this raw dataset!")
 
-def ingest_text(text, output_csv="processed_assessment.csv"):
-    """Ingests a single pasted string of unstructured threat-intel text.
+def _split_into_chunks(text, min_chunk_len=15):
+    """Splits freeform pasted text into sentence/line-level chunks.
 
-    Writes a one-row CSV compatible with the same schema first_present() expects
-    elsewhere in this codebase (consolidate_findings.py / agent_batch_processor.py
-    look for columns named IP/Hostname/Finding/Severity among their candidate
-    lists), so freeform-pasted text can flow through the same downstream
-    pipeline as a spreadsheet-derived row.
+    A CTI narrative describing a threat actor typically covers MANY distinct
+    techniques ("established persistence via valid accounts... exploited a
+    public-facing application... used phishing for initial access"). Treating
+    the whole paste as a single semantic-search query collapses all of that
+    down to whichever single technique scores highest, silently discarding
+    every other technique the text describes. Splitting into per-sentence
+    chunks lets each behavior get its own resolution attempt downstream in
+    consolidate_findings.py, so multiple techniques can actually surface.
+
+    A single short finding with no sentence punctuation (e.g. "Weak
+    administrative password set") splits into exactly one chunk -- unchanged
+    behavior for that existing use case.
     """
-    MAX_FINDING_CHARS = 500
+    lines = [ln.strip(" -*•\t") for ln in re.split(r'\n+', text) if ln.strip()]
+    chunks = []
+    for line in lines:
+        for sentence in re.split(r'(?<=[.!?])\s+', line):
+            sentence = sentence.strip()
+            if len(sentence) >= min_chunk_len:
+                chunks.append(sentence)
+    return chunks
+
+
+def ingest_text(text, output_csv="processed_assessment.csv"):
+    """Ingests a pasted string of unstructured threat-intel text.
+
+    Splits it into per-sentence/per-line chunks (see _split_into_chunks) and
+    writes one row per chunk, each compatible with the same schema
+    first_present() expects elsewhere in this codebase (consolidate_findings.py
+    / agent_batch_processor.py look for columns named IP/Hostname/Finding/
+    Severity among their candidate lists), so freeform-pasted text -- whether
+    a one-line finding or a multi-paragraph threat-actor profile -- flows
+    through the same downstream pipeline as spreadsheet-derived rows.
+    """
+    MAX_CHUNK_CHARS = 500
 
     stripped = text.strip() if text else ""
-    finding_text = stripped if len(stripped) <= MAX_FINDING_CHARS else stripped[:MAX_FINDING_CHARS]
+    chunks = _split_into_chunks(stripped) if stripped else []
+    if not chunks and stripped:
+        # No sentence boundaries found (a short one-line finding) -- keep the
+        # whole thing as a single chunk rather than dropping it.
+        chunks = [stripped]
 
-    row_data = {
-        "_sheet": "pasted",
-        "IP": "N/A",
-        "Hostname": "N/A",
-        "Finding": finding_text,
-        "Severity": "Unknown",
-    }
+    rows = [
+        {
+            "_sheet": "pasted",
+            "IP": "N/A",
+            "Hostname": "N/A",
+            "Finding": chunk if len(chunk) <= MAX_CHUNK_CHARS else chunk[:MAX_CHUNK_CHARS],
+            "Severity": "Unknown",
+        }
+        for chunk in chunks
+    ]
+    if not rows:
+        rows = [{"_sheet": "pasted", "IP": "N/A", "Hostname": "N/A", "Finding": stripped, "Severity": "Unknown"}]
 
-    flattened_df = pd.DataFrame([row_data])
+    flattened_df = pd.DataFrame(rows)
     flattened_df.to_csv(output_csv, index=False)
-    print(f"Saved pasted text as a single-row assessment to {output_csv}.")
+    print(f"Saved pasted text as {len(flattened_df)} chunk(s) to {output_csv}.")
     return flattened_df
 
 

@@ -10,6 +10,7 @@ the logic already in agent_batch_processor.py (steps 1.5-6) -- it is not a
 reimplementation, just relocated so it can run per-technique-group instead
 of per-row.
 """
+import re
 import sys
 import os
 import pandas as pd
@@ -18,6 +19,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(BASE_DIR, 'scripts'))
 from graph_engine import KnowledgeGraphEngine
 
+# Matches a literal ATT&CK technique ID mentioned anywhere in a row's text, e.g.
+# "T1566" or "T1078.004". Word boundaries keep this from matching inside a
+# longer alphanumeric token.
+TECHNIQUE_ID_RE = re.compile(r'\bT\d{4}(?:\.\d{3})?\b')
+
 
 def first_present(row, candidates, default="Unknown"):
     """Returns the first non-empty value among candidate column names (schemas vary per team)."""
@@ -25,6 +31,44 @@ def first_present(row, candidates, default="Unknown"):
         if col in row.index and pd.notna(row[col]) and str(row[col]).strip():
             return str(row[col]).strip()
     return default
+
+
+def compose_finding_text(row, candidates):
+    """Descriptive text for a row: the first matching named candidate column,
+    or -- if none of those columns exist -- every non-empty column joined
+    together. Without this fallback, a row from an unfamiliar schema (e.g. a
+    MITRE ATT&CK group's own "techniques used" export, whose columns are
+    ID/Name/Tactics rather than Finding/Observation/Description) degrades to
+    the literal string "Unknown" for every row, which is useless as a
+    semantic-search query and as a compose_finding_text fallback everywhere
+    else it's shown (e.g. the Affected Hosts table's Finding column).
+    """
+    named = first_present(row, candidates, default=None)
+    if named:
+        return named
+    parts = [
+        f"{col}: {str(val).strip()}" for col, val in row.items()
+        if pd.notna(val) and str(val).strip() and str(val).strip().lower() != 'nan'
+    ]
+    return " | ".join(parts) if parts else "Unknown"
+
+
+def extract_direct_technique_ids(engine, text):
+    """Finds literal ATT&CK technique IDs mentioned directly in text (e.g. a
+    MITRE ATT&CK Navigator/group "techniques used" export has an explicit ID
+    column) and returns the ones that are real technique nodes in the graph,
+    in first-seen order, deduplicated. Trusting an explicit ID beats
+    re-deriving it via semantic search on unrelated columns.
+    """
+    seen = []
+    for match in TECHNIQUE_ID_RE.finditer(text or ""):
+        candidate = match.group(0)
+        if candidate in seen:
+            continue
+        node = engine.query_node(candidate)
+        if node and node.get('type') == 'attack_technique':
+            seen.append(candidate)
+    return seen
 
 
 def resolve_technique(engine, finding_text):
@@ -41,8 +85,36 @@ def resolve_technique(engine, finding_text):
     return None
 
 
+def resolve_techniques(engine, row, finding_text):
+    """Resolves ALL ATT&CK techniques relevant to one row.
+
+    Priority order:
+    1. Any literal technique ID mentioned anywhere in the row (any column, or
+       the composed finding_text) -- trust an explicit label over a guess.
+       A single row CAN yield more than one technique this way (e.g. a CTI
+       excerpt or a Navigator export row that cites two IDs).
+    2. Otherwise, semantic-search finding_text and take the single
+       highest-scoring technique match (the original, unchanged behavior).
+
+    Returns a list of (node_id, node_data, score) tuples -- usually length 1,
+    occasionally more, possibly empty.
+    """
+    row_text = " | ".join(str(v) for v in row.values if pd.notna(v))
+    direct_ids = extract_direct_technique_ids(engine, row_text)
+    if direct_ids:
+        return [(tid, engine.query_node(tid), 1.0) for tid in direct_ids]
+
+    single = resolve_technique(engine, finding_text)
+    return [single] if single else []
+
+
 def group_findings_by_technique(engine, df):
-    """Groups CSV rows by resolved ATT&CK technique id.
+    """Groups CSV rows by resolved ATT&CK technique id(s).
+
+    A single row can resolve to more than one technique (see
+    resolve_techniques()) -- when it does, the row is attributed to every
+    matching technique's group, since the underlying finding genuinely
+    relates to all of them.
 
     Returns (groups_dict, skipped_count) where groups_dict maps
     technique_id -> {technique_name, technique_description, affected_hosts,
@@ -52,35 +124,34 @@ def group_findings_by_technique(engine, df):
     skipped_count = 0
 
     for index, row in df.iterrows():
-        finding_text = first_present(row, ['Finding', 'Observation', 'Vulnerability', 'Description'])
+        finding_text = compose_finding_text(row, ['Finding', 'Observation', 'Vulnerability', 'Description'])
         ip = first_present(row, ['IP', 'Target Address', 'Address'], default="N/A")
         hostname = first_present(row, ['Hostname', 'Host', 'Target'], default="N/A")
         severity = first_present(row, ['Severity'], default="Unknown")
 
-        mitre_node = resolve_technique(engine, finding_text)
-        if not mitre_node:
+        mitre_nodes = resolve_techniques(engine, row, finding_text)
+        if not mitre_nodes:
             print(f"[{index}] No MITRE technique found for '{finding_text}' -- skipping")
             skipped_count += 1
             continue
 
-        t_code, mitre_node_data, score = mitre_node
+        for t_code, mitre_node_data, score in mitre_nodes:
+            if t_code not in groups:
+                groups[t_code] = {
+                    "technique_name": mitre_node_data.get('name', 'Unknown'),
+                    "technique_description": mitre_node_data.get('description', 'Unknown'),
+                    "affected_hosts": [],
+                    "severity_breakdown": {},
+                }
 
-        if t_code not in groups:
-            groups[t_code] = {
-                "technique_name": mitre_node_data.get('name', 'Unknown'),
-                "technique_description": mitre_node_data.get('description', 'Unknown'),
-                "affected_hosts": [],
-                "severity_breakdown": {},
-            }
-
-        group = groups[t_code]
-        group["affected_hosts"].append({
-            "ip": ip,
-            "hostname": hostname,
-            "finding_text": finding_text,
-            "severity": severity,
-        })
-        group["severity_breakdown"][severity] = group["severity_breakdown"].get(severity, 0) + 1
+            group = groups[t_code]
+            group["affected_hosts"].append({
+                "ip": ip,
+                "hostname": hostname,
+                "finding_text": finding_text,
+                "severity": severity,
+            })
+            group["severity_breakdown"][severity] = group["severity_breakdown"].get(severity, 0) + 1
 
     print(f"Grouped findings into {len(groups)} unique technique(s); skipped {skipped_count} row(s) with no technique resolution.")
     return groups, skipped_count

@@ -142,11 +142,16 @@ async def analyze(
             status_code=400,
             detail=f"Invalid provider '{provider}'. Must be one of {sorted(VALID_PROVIDERS)}.",
         )
-    # "none" means "use LLM_PROVIDER env var default" in the same way that
-    # omitting the field does -- run_pipeline/get_provider treat None the
-    # same as an unrecognized/empty name (heuristic fallback), so normalize
-    # "none" to None here rather than threading the literal string through.
-    provider_name = None if provider in (None, "", "none") else provider
+    # Only an OMITTED/empty field means "no override, use the server's
+    # LLM_PROVIDER env var default" -- get_provider(None) reads that env var.
+    # An explicit "none" must NOT be folded into that case: get_provider("none")
+    # forces heuristic mode regardless of what LLM_PROVIDER is set to server-side,
+    # which is the whole point of the frontend's "Heuristic (no LLM)" option --
+    # collapsing "none" into None here would silently defeat that choice whenever
+    # the server default isn't already "none" (this was a real bug: it made the
+    # "Heuristic (no LLM)" dropdown option a no-op that used the server default
+    # LLM instead).
+    provider_name = None if provider in (None, "") else provider
 
     job_id = uuid.uuid4().hex
     JOBS[job_id] = {"status": "pending", "stage": "", "error": None, "report_ids": []}

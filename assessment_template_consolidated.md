@@ -12,7 +12,7 @@
 
 **Finding / Threat Summary:** {THREAT_INPUT_SUMMARY}
 
-**Affected Hosts:**
+**{HOST_CONTEXT_LABEL}:**
 
 {AFFECTED_HOSTS_TABLE}
 

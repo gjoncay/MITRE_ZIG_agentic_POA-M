@@ -34,7 +34,7 @@ sys.path.append(os.path.join(BASE_DIR, 'scripts'))
 from graph_engine import KnowledgeGraphEngine
 from consolidate_findings import group_findings_by_technique, crawl_correlation, build_context
 from llm_providers import get_provider
-from report_schema import build_report_json, render_markdown
+from report_schema import build_report_json, render_markdown, _is_hostless
 
 TEMPLATE_PATH = os.path.join(BASE_DIR, "assessment_template_consolidated.md")
 
@@ -127,11 +127,22 @@ def _build_render_narrative(t_code, context, provider_narrative, full_affected_h
     affected_hosts = context.get("affected_hosts", [])
     finding_count = context.get("finding_count", len(affected_hosts))
     hosts_for_unique_count = full_affected_hosts if full_affected_hosts is not None else affected_hosts
-    unique_hosts = len({h.get("hostname") for h in hosts_for_unique_count}) if hosts_for_unique_count else 0
-    threat_input_summary = (
-        f"{finding_count} finding(s) across {unique_hosts} unique host(s) resolved to "
-        f"[{t_code}] {context.get('technique_name', 'this technique')}."
-    )
+
+    if _is_hostless(hosts_for_unique_count):
+        # CTI/adversary-narrative input carries no real asset data -- "N unique
+        # host(s)" would be a meaningless "N/A" count, so drop the host framing
+        # entirely rather than report a number that implies asset context that
+        # was never there.
+        threat_input_summary = (
+            f"{finding_count} observation(s) resolved to "
+            f"[{t_code}] {context.get('technique_name', 'this technique')}."
+        )
+    else:
+        unique_hosts = len({h.get("hostname") for h in hosts_for_unique_count}) if hosts_for_unique_count else 0
+        threat_input_summary = (
+            f"{finding_count} finding(s) across {unique_hosts} unique host(s) resolved to "
+            f"[{t_code}] {context.get('technique_name', 'this technique')}."
+        )
 
     return {
         "threat_input_summary": threat_input_summary,
