@@ -53,7 +53,7 @@ except ImportError:  # Semantic search is optional in an air-gapped deployment.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 GRAPH_SCHEMA_VERSION = "2"
-MAPPING_MATRIX_VERSION = "1.0"
+MAPPING_MATRIX_VERSION = "1.1"
 MANIFEST_FILENAME = "graph_snapshot_manifest.json"
 EMBEDDING_METADATA_FILENAME = "embedding_metadata.json"
 EMBEDDING_FILENAME = "graph_embeddings.npz"
@@ -80,6 +80,7 @@ MAPPING_MATRIX: dict[str, dict[str, Any]] = {
             "attack_technique <-mitigates- zig_activity",
             "zig_activity -belongs_to_capability-> zig_capability",
             "zig_capability -belongs_to_pillar-> zig_pillar",
+            "zig_capability <-implements_capability- zig_technology",
         ],
         "scope": "direct_or_inherited_parent",
     },
@@ -613,6 +614,7 @@ class GraphMappingService:
         "zig_activity",
         "zig_capability",
         "zig_pillar",
+        "zig_technology",
         "cref_approach",
         "cref_technique",
         "cref_objective",
@@ -624,6 +626,7 @@ class GraphMappingService:
         "mitigation_activity",
         "mitigation_capability",
         "mitigation_pillar",
+        "mitigation_zig_technology",
         "mitigation_cref_approach",
         "mitigation_cref_technique",
         "mitigation_cref_objective",
@@ -808,6 +811,22 @@ class GraphMappingService:
                     steps=capability_steps,
                 )
             )
+            # Technology mappings point *to* their implemented capability.
+            # Preserve that incoming traversal explicitly so report consumers
+            # can show every graph-backed implementation option without a
+            # keyword/semantic recommendation fallback.
+            for technology_edge in self._in(capability_id, "implements_capability", "zig_technology"):
+                technology_id = technology_edge["source_id"]
+                paths.append(
+                    self._new_path(
+                        category="zig_technology",
+                        requested_technique_id=requested_id,
+                        source_technique_id=source_id,
+                        mapping_scope=scope,
+                        node_ids=[*capability_nodes, technology_id],
+                        steps=[*capability_steps, (capability_id, technology_id, technology_edge)],
+                    )
+                )
             for pillar_edge in self._out(capability_id, "belongs_to_pillar", "zig_pillar"):
                 pillar_id = pillar_edge["target_id"]
                 paths.append(
@@ -978,6 +997,18 @@ class GraphMappingService:
                         steps=capability_steps,
                     )
                 )
+                for technology_edge in self._in(capability_id, "implements_capability", "zig_technology"):
+                    technology_id = technology_edge["source_id"]
+                    paths.append(
+                        self._new_path(
+                            category="mitigation_zig_technology",
+                            requested_technique_id=requested_id,
+                            source_technique_id=source_id,
+                            mapping_scope=scope,
+                            node_ids=[*capability_nodes, technology_id],
+                            steps=[*capability_steps, (capability_id, technology_id, technology_edge)],
+                        )
+                    )
                 for pillar_edge in self._out(capability_id, "belongs_to_pillar", "zig_pillar"):
                     pillar_id = pillar_edge["target_id"]
                     paths.append(
@@ -1266,6 +1297,7 @@ class GraphMappingService:
                         "zig_activity_ids": set(),
                         "zig_capability_ids": set(),
                         "zig_pillar_ids": set(),
+                        "zig_technology_ids": set(),
                         "cref_approach_ids": set(),
                         "cref_technique_ids": set(),
                         "cref_objective_ids": set(),
@@ -1280,6 +1312,7 @@ class GraphMappingService:
                 group["zig_activity_ids"].update(ids_by_type["zig_activity"])
                 group["zig_capability_ids"].update(ids_by_type["zig_capability"])
                 group["zig_pillar_ids"].update(ids_by_type["zig_pillar"])
+                group["zig_technology_ids"].update(ids_by_type["zig_technology"])
                 group["cref_approach_ids"].update(ids_by_type["cref_approach"])
                 group["cref_technique_ids"].update(ids_by_type["cref_technique"])
                 group["cref_objective_ids"].update(ids_by_type["cref_objective"])

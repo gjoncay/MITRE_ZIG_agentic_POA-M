@@ -253,6 +253,23 @@ def crawl_correlation(engine, t_code):
     def unique(values):
         return list(dict.fromkeys(value for value in values if value))
 
+    def path_node_labels(*node_types):
+        """Return every distinct validated node label of the requested type.
+
+        The framework bundle's path records are authoritative and may contain
+        defensive artifacts that do not have a lossy legacy scalar summary.
+        Pulling labels from those paths keeps the Markdown report complete
+        without inventing an additional graph traversal.
+        """
+        wanted = set(node_types)
+        return unique(
+            label(node.get("id"), node.get("name"))
+            for path in bundle.get("paths", [])
+            if path.get("validation", {}).get("state") == "valid"
+            for node in path.get("nodes", [])
+            if node.get("type") in wanted and node.get("id")
+        )
+
     tactics = bundle.get("attack_tactics") or []
     zig = bundle.get("zig") or []
     cref = bundle.get("cref") or []
@@ -273,10 +290,10 @@ def crawl_correlation(engine, t_code):
         "d3fend_countermeasures": unique(
             label(item.get("d3fend_id"), item.get("d3fend_name")) for item in d3fend
         ),
-        # Full D3FEND artifacts remain in the provenance paths.  There is no
-        # scalar summary field in the mapping matrix that can safely express
-        # all of them without falsely collapsing distinct paths.
-        "d3fend_artifacts": [],
+        # Render every artifact found on a validated mapping path.  The full
+        # path bundle remains available for provenance, while this stable,
+        # de-duplicated list makes the human Markdown report complete too.
+        "d3fend_artifacts": path_node_labels("defensive_artifact", "attack_datacomponent"),
         "mitre_analytics": unique(
             label(item.get("analytic_id"), item.get("analytic_description") or item.get("analytic_name"))
             for item in analytics
@@ -289,7 +306,7 @@ def crawl_correlation(engine, t_code):
         "zig_activity_name": primary_zig.get("activity_name", "No matching ZIG activity"),
         "zig_capability_id": primary_zig.get("capability_id", "None found"),
         "zig_capability_name": primary_zig.get("capability_name", "No matching ZIG activity"),
-        "zig_technologies": [],
+        "zig_technologies": path_node_labels("zig_technology"),
         "cref_goal": primary_cref.get("goal_name", "None found in graph"),
         "cref_objective": primary_cref.get("objective_name", "None found in graph"),
         "cref_technique": primary_cref.get("technique_name", "None found in graph"),
@@ -312,26 +329,24 @@ def crawl_correlation(engine, t_code):
     }
 
 
-def build_context(t_code, group_data, correlation_data, max_hosts_displayed=50):
-    """Merges group_data and correlation_data into the flat context dict draft_narrative() consumes."""
+def build_context(t_code, group_data, correlation_data):
+    """Merge group/correlation data into a full human-report context.
+
+    The downstream LLM receives its own bounded view via ``_llm_context``.
+    Keeping all observations here ensures the immutable Markdown report and
+    its JSON twin contain the complete source set instead of a 50-row preview.
+    """
     affected_hosts = group_data["affected_hosts"]
     finding_count = len(affected_hosts)
-
-    displayed_hosts = affected_hosts[:max_hosts_displayed]
-    hosts_truncated_note = None
-    if finding_count > max_hosts_displayed:
-        hosts_truncated_note = (
-            f"Showing first {max_hosts_displayed} of {finding_count} affected hosts."
-        )
 
     context = {
         "technique_id": t_code,
         "technique_name": group_data["technique_name"],
         "technique_description": group_data["technique_description"],
-        "affected_hosts": displayed_hosts,
+        "affected_hosts": affected_hosts,
         "finding_count": finding_count,
         "severity_breakdown": group_data["severity_breakdown"],
-        "hosts_truncated_note": hosts_truncated_note,
+        "hosts_truncated_note": None,
     }
     context.update(correlation_data)
     return context

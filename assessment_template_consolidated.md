@@ -39,9 +39,7 @@
 
 ### D3FEND Countermeasures
 *The defensive mechanisms and artifacts required to detect, isolate, or mitigate the threat based on the D3FEND matrix.*
-- **Countermeasure(s):**
-  - {D3FEND_COUNTERMEASURE_1}
-  - {D3FEND_COUNTERMEASURE_2}
+- **Countermeasure(s):**{D3FEND_COUNTERMEASURES}
 - **Target Artifact(s):** {D3FEND_ARTIFACTS}
 
 ---
@@ -89,9 +87,7 @@
 
 *Specific hardware, software, or configuration classes required to implement the ZIG capabilities and D3FEND countermeasures across all affected hosts.*
 
-- **Recommended Technologies:**
-  - {ZIG_TECHNOLOGY_1}
-  - {ZIG_TECHNOLOGY_2}
+- **Recommended Technologies:**{ZIG_TECHNOLOGIES}
 - **Implementation Notes:** {TECHNOLOGY_IMPLEMENTATION_NOTES}
 
 ---

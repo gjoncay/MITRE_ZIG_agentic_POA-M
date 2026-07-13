@@ -15,9 +15,9 @@ analyst report pipeline. Wires together:
 Adapter note: consolidate_findings.build_context() and report_schema.py's
 render_markdown()/build_report_json() were built independently and use
 different field shapes for the same facts (e.g. lists vs. pre-joined display
-strings, `finding_text` vs `finding`, a capped `affected_hosts` vs. the full
-list expected for JSON). `_adapt_context_for_render()` and the full-host-list
-override below reconcile those shapes; see their docstrings for specifics.
+strings and `finding_text` vs `finding`). `_adapt_context_for_render()`
+reconciles those shapes while retaining complete evidence lists; see its
+docstring for specifics.
 """
 import sys
 import os
@@ -49,7 +49,6 @@ TEMPLATE_PATH = os.path.join(BASE_DIR, "assessment_template_consolidated.md")
 # citation-style cross-references, and without the exclusion every report
 # containing one would be false-positive FLAGged as a hallucinated ID.
 ID_TOKEN_RE = re.compile(r"\[([A-Z0-9][A-Za-z0-9.\-]*)\](?!\()")
-DISPLAY_MAPPING_LIMIT = 12
 MODEL_MAPPING_ITEM_LIMIT = 12
 MODEL_OBSERVATION_EXCERPT_LIMIT = 1_200
 MODEL_QA_MARKDOWN_MAX_CHARS = max(4_000, int(os.environ.get("LLM_QA_MARKDOWN_MAX_CHARS", "40_000")))
@@ -66,26 +65,25 @@ def _unique_nonempty(items):
     return list(dict.fromkeys(str(item) for item in items if item not in (None, "")))
 
 
-def _joined_or_default(items, default="None found in graph", sep=", ", limit=None):
+def _joined_or_default(items, default="None found in graph", sep=", "):
+    """Render every unique graph-backed item for the human report.
+
+    Human-readable reports are authoritative review artifacts, not compact
+    previews.  Keep model-input bounds in ``_llm_context`` instead of hiding
+    validated mapping results behind a JSON/API-only suffix here.
+    """
     values = _unique_nonempty(items)
     if not values:
         return default
-    subset = values[:limit] if limit is not None else values
-    text = sep.join(subset)
-    if limit is not None and len(values) > len(subset):
-        text += f"{sep}… and {len(values) - len(subset)} more (see JSON/API)"
-    return text
+    return sep.join(values)
 
 
-def _bulleted_or_default(items, default="None specified", limit=None):
+def _bulleted_or_default(items, default="None specified"):
+    """Render every unique item as a Markdown bullet list."""
     values = _unique_nonempty(items)
-    subset = values[:limit] if limit is not None else values
-    if not subset:
+    if not values:
         return default
-    rendered = "\n  - " + "\n  - ".join(subset)
-    if limit is not None and len(values) > len(subset):
-        rendered += f"\n  - … and {len(values) - len(subset)} more (see JSON/API)"
-    return rendered
+    return "\n  - " + "\n  - ".join(values)
 
 
 def _graph_label(item_id, name, default="None found in graph"):
@@ -100,6 +98,25 @@ def _mapping_label(item, item_id_key, item_name_key, default="None found in grap
     if item.get("mapping_scope") == "inherited_parent":
         return f"{label} (inherited from parent technique)"
     return label
+
+
+def _mapping_labels_for_layer(items, item_id_key, item_name_key, default="None found in graph"):
+    """Render a framework layer only from paths that actually reach it.
+
+    A CREF path can legitimately end at an Approach or Effect before it
+    reaches a Technique, Objective, or Goal.  Rendering every path in every
+    layer turned those partial paths into misleading ``None found in graph``
+    bullets beside valid mappings.  Filter on the layer's ID first, then use
+    the fallback only when no path reaches that layer at all.
+    """
+    return _bulleted_or_default(
+        [
+            _mapping_label(item, item_id_key, item_name_key, default)
+            for item in items
+            if item.get(item_id_key)
+        ],
+        default=default,
+    )
 
 
 def _adapt_context_for_render(context, narrative_fields):
@@ -124,12 +141,18 @@ def _adapt_context_for_render(context, narrative_fields):
     ]
 
     d3fend_cms = context.get("d3fend_countermeasures") or []
+    adapted["d3fend_countermeasures_all"] = list(d3fend_cms)
+    adapted["d3fend_countermeasures_display"] = _bulleted_or_default(
+        d3fend_cms, default="None found in graph"
+    )
     adapted["d3fend_countermeasure_1"] = d3fend_cms[0] if len(d3fend_cms) > 0 else "None found in graph"
     adapted["d3fend_countermeasure_2"] = d3fend_cms[1] if len(d3fend_cms) > 1 else "None found in graph"
-    adapted["d3fend_artifacts"] = _joined_or_default((context.get("d3fend_artifacts") or [])[:3])
+    d3fend_artifacts = context.get("d3fend_artifacts") or []
+    adapted["d3fend_artifacts_all"] = list(d3fend_artifacts)
+    adapted["d3fend_artifacts"] = _joined_or_default(d3fend_artifacts)
 
-    adapted["mitre_analytics"] = _bulleted_or_default(context.get("mitre_analytics") or [], limit=2)
-    adapted["mitre_mitigations"] = _bulleted_or_default(context.get("mitre_mitigations") or [], limit=2)
+    adapted["mitre_analytics"] = _bulleted_or_default(context.get("mitre_analytics") or [])
+    adapted["mitre_mitigations"] = _bulleted_or_default(context.get("mitre_mitigations") or [])
 
     mappings = context.get("framework_mappings") or {}
     zig_mappings = mappings.get("zig") or []
@@ -142,21 +165,28 @@ def _adapt_context_for_render(context, narrative_fields):
 
     if zig_mappings:
         adapted["zig_pillar_name"] = _joined_or_default(
-            [_mapping_label(item, "pillar_id", "pillar_name", "Unknown Pillar") for item in zig_mappings],
-            default="Unknown Pillar", limit=DISPLAY_MAPPING_LIMIT,
+            [
+                _mapping_label(item, "pillar_id", "pillar_name", "Unknown Pillar")
+                for item in zig_mappings
+                if item.get("pillar_id")
+            ],
+            default="Unknown Pillar",
         )
         adapted["zig_capability_id"] = _joined_or_default(
-            [item.get("capability_id") or "None found" for item in zig_mappings],
-            default="None found", limit=DISPLAY_MAPPING_LIMIT,
+            [item["capability_id"] for item in zig_mappings if item.get("capability_id")],
+            default="None found",
         )
         adapted["zig_capability_name"] = _joined_or_default(
-            [_mapping_label(item, "capability_id", "capability_name", "No matching ZIG capability") for item in zig_mappings],
-            default="No matching ZIG capability", limit=DISPLAY_MAPPING_LIMIT,
+            [
+                _mapping_label(item, "capability_id", "capability_name", "No matching ZIG capability")
+                for item in zig_mappings
+                if item.get("capability_id")
+            ],
+            default="No matching ZIG capability",
         )
-        adapted["zig_activity_1"] = _bulleted_or_default([
-            _mapping_label(item, "activity_id", "activity_name")
-            for item in zig_mappings
-        ], limit=DISPLAY_MAPPING_LIMIT)
+        adapted["zig_activity_1"] = _mapping_labels_for_layer(
+            zig_mappings, "activity_id", "activity_name"
+        )
     else:
         adapted["zig_pillar_name"] = context.get("zig_pillar", "Unknown Pillar")
         adapted["zig_activity_1"] = _graph_label(
@@ -165,46 +195,56 @@ def _adapt_context_for_render(context, narrative_fields):
         )
 
     if cref_mappings:
-        adapted["cref_goal"] = _bulleted_or_default([
-            _mapping_label(item, "goal_id", "goal_name") for item in cref_mappings
-        ], limit=DISPLAY_MAPPING_LIMIT)
-        adapted["cref_objective"] = _bulleted_or_default([
-            _mapping_label(item, "objective_id", "objective_name") for item in cref_mappings
-        ], limit=DISPLAY_MAPPING_LIMIT)
-        adapted["cref_technique"] = _bulleted_or_default([
-            _mapping_label(item, "technique_id", "technique_name") for item in cref_mappings
-        ], limit=DISPLAY_MAPPING_LIMIT)
-        adapted["cref_approach"] = _bulleted_or_default([
-            _mapping_label(item, "approach_id", "approach_name") for item in cref_mappings
-        ], limit=DISPLAY_MAPPING_LIMIT)
-        adapted["cref_effect"] = _bulleted_or_default([
-            _mapping_label(item, "effect_id", "effect_name") for item in cref_mappings
-        ], limit=DISPLAY_MAPPING_LIMIT)
+        adapted["cref_goal"] = _mapping_labels_for_layer(
+            cref_mappings, "goal_id", "goal_name"
+        )
+        adapted["cref_objective"] = _mapping_labels_for_layer(
+            cref_mappings, "objective_id", "objective_name"
+        )
+        adapted["cref_technique"] = _mapping_labels_for_layer(
+            cref_mappings, "technique_id", "technique_name"
+        )
+        adapted["cref_approach"] = _mapping_labels_for_layer(
+            cref_mappings, "approach_id", "approach_name"
+        )
+        adapted["cref_effect"] = _mapping_labels_for_layer(
+            cref_mappings, "effect_id", "effect_name"
+        )
     if mitigation_mappings:
         adapted["cref_mitigation_id"] = _joined_or_default(
-            [item.get("mitigation_id") for item in mitigation_mappings], limit=DISPLAY_MAPPING_LIMIT
+            [item["mitigation_id"] for item in mitigation_mappings if item.get("mitigation_id")]
         )
         adapted["cref_mitigation_name"] = _joined_or_default(
-            [_mapping_label(item, "mitigation_id", "mitigation_name") for item in mitigation_mappings],
-            limit=DISPLAY_MAPPING_LIMIT,
+            [
+                _mapping_label(item, "mitigation_id", "mitigation_name")
+                for item in mitigation_mappings
+                if item.get("mitigation_id")
+            ],
         )
         controls = _unique_nonempty(
             control for item in mitigation_mappings for control in item.get("nist_800_53_controls", [])
         )
         adapted["nist_800_53_controls"] = _joined_or_default(
-            controls, default="None mapped in graph", limit=DISPLAY_MAPPING_LIMIT
+            controls, default="None mapped in graph"
         )
         adapted["traceability"] = _joined_or_default([
             f"Implements ZIG Activity {activity_id}"
             for item in mitigation_mappings for activity_id in item.get("zig_activity_ids", [])
-        ], default=context.get("traceability", "N/A — no graph mapping"), limit=DISPLAY_MAPPING_LIMIT)
+        ], default=context.get("traceability", "N/A — no graph mapping"))
     if csa_mappings:
         adapted["csa_name"] = _joined_or_default(
-            [_mapping_label(item, "csa_id", "csa_name") for item in csa_mappings],
-            limit=DISPLAY_MAPPING_LIMIT,
+            [
+                _mapping_label(item, "csa_id", "csa_name")
+                for item in csa_mappings
+                if item.get("csa_id")
+            ],
         )
 
     zig_techs = context.get("zig_technologies") or []
+    adapted["zig_technologies_all"] = list(zig_techs)
+    adapted["zig_technologies_display"] = _bulleted_or_default(
+        zig_techs, default="None found in graph"
+    )
     adapted["zig_technology_1"] = zig_techs[0] if len(zig_techs) > 0 else "None found in graph"
     adapted["zig_technology_2"] = zig_techs[1] if len(zig_techs) > 1 else "None found in graph"
 
@@ -245,7 +285,15 @@ def _compact_mapping_value(value, *, item_limit=MODEL_MAPPING_ITEM_LIMIT):
 
 def _llm_context(context):
     """Produce a bounded, explicitly untrusted-input view for an LLM call."""
-    compact = {key: value for key, value in context.items() if key not in {"framework_mappings", "affected_hosts"}}
+    # The report context deliberately retains every observation/mapping for
+    # human review.  Apply the model-only item ceiling to every remaining
+    # collection here so newly complete lists (for example all ZIG technology
+    # options) never expand an LLM request without bound.
+    compact = {
+        key: _compact_mapping_value(value)
+        for key, value in context.items()
+        if key not in {"framework_mappings", "affected_hosts"}
+    }
     observations = []
     for host in (context.get("affected_hosts") or [])[:MODEL_MAPPING_ITEM_LIMIT]:
         item = dict(host)
@@ -304,12 +352,10 @@ def _build_render_narrative(t_code, context, provider_narrative, full_affected_h
     `technology_implementation_notes`, neither of which the provider drafts --
     those are consolidated-report framing text, constructed here from context.
 
-    `full_affected_hosts` (the uncapped list from group_data) is used for the
-    unique-host count when supplied: `context["affected_hosts"]` is
-    build_context()'s display-capped (<=50) list, so counting unique hostnames
-    off of it alone would understate "N unique hosts" once a technique group
-    exceeds the cap (e.g. "60 findings across 50 unique hosts" for 60 distinct
-    hosts truncated for markdown display).
+    `full_affected_hosts` remains an explicit source-of-truth override for
+    callers that retain observations outside ``context``.  The supported
+    pipeline now keeps all observations in ``context`` too, so the Markdown
+    report and its summary agree even for large technique groups.
     """
     affected_hosts = context.get("affected_hosts", [])
     finding_count = context.get("finding_count", len(affected_hosts))
@@ -790,8 +836,8 @@ def run_pipeline(
         report_json["mapping_snapshot_hash"] = hashlib.sha256(
             json.dumps(context.get("framework_mappings", {}), sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()
-        # build_report_json's affected_hosts should be the FULL list for machine
-        # consumption; build_context() already capped it for markdown display.
+        # Keep the JSON twin explicitly tied to the original normalized rows.
+        # Markdown receives the same complete list through build_context().
         report_json["affected_hosts"] = [
             {**host, "finding": host.get("finding_text", host.get("finding", "N/A"))}
             for host in group_data["affected_hosts"]

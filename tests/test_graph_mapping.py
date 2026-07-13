@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from consolidate_findings import crawl_correlation  # noqa: E402
 from graph_engine import GraphRepository, KnowledgeGraphEngine  # noqa: E402
 
 
@@ -37,10 +38,12 @@ def _small_graph(tmp_path: Path) -> KnowledgeGraphEngine:
         ["ZIG-ACT-1", "zig_activity", "Activity", "", ""],
         ["ZIG-CAP-1", "zig_capability", "Capability", "", ""],
         ["ZIG-PIL-1", "zig_pillar", "Pillar", "", ""],
+        ["ZIG-TECH-1", "zig_technology", "Technology", "", ""],
     ])
     _write_csv(tmp_path / "zig_edges.csv", ["source_id", "target_id", "relationship_type"], [
         ["ZIG-ACT-1", "ZIG-CAP-1", "belongs_to_capability"],
         ["ZIG-CAP-1", "ZIG-PIL-1", "belongs_to_pillar"],
+        ["ZIG-TECH-1", "ZIG-CAP-1", "implements_capability"],
     ])
     _write_csv(tmp_path / "cref_nodes.csv", ["id", "type", "name", "description", "url"], [])
     _write_csv(tmp_path / "cref_edges.csv", ["source_id", "target_id", "relationship_type"], [
@@ -48,6 +51,7 @@ def _small_graph(tmp_path: Path) -> KnowledgeGraphEngine:
         # Same logical endpoints/type as the native relation in a second source
         # file: it must remain a distinct edge record.
         ["M0001", "T0001", "mitigates"],
+        ["M0001", "ZIG-ACT-1", "implements_activity"],
     ])
     repository = GraphRepository(tmp_path)
     repository.load()
@@ -57,7 +61,7 @@ def _small_graph(tmp_path: Path) -> KnowledgeGraphEngine:
 
 def test_loaded_graph_preserves_every_raw_edge_row_and_edge_provenance(tmp_path: Path) -> None:
     engine = _small_graph(tmp_path)
-    assert engine.graph.number_of_edges() == 7
+    assert engine.graph.number_of_edges() == 9
     mitigation_edges = engine.repository.incoming("T0001", "mitigates", "attack_mitigation")
     assert len(mitigation_edges) == 2
     assert {edge["source_file"] for edge in mitigation_edges} == {"mitre_edges.csv", "cref_edges.csv"}
@@ -76,6 +80,29 @@ def test_inherited_parent_paths_are_explicit_and_validated(tmp_path: Path) -> No
     assert all(path["edges"][0]["relationship_type"] == "subtechnique_of" for path in inherited)
     assert any(path["category"] == "zig_pillar" for path in inherited)
     assert any(item["mitigation_id"] == "M0001" for item in bundle["attack_mitigations"])
+
+
+def test_zig_technology_paths_are_provenanced_for_direct_and_mitigation_routes(tmp_path: Path) -> None:
+    engine = _small_graph(tmp_path)
+    bundle = engine.get_framework_bundle("T0001")
+
+    assert bundle["mapping_matrix_version"] == engine.snapshot_manifest["mapping_matrix_version"]
+    technology_paths = [
+        path for path in bundle["paths"]
+        if path["category"] in {"zig_technology", "mitigation_zig_technology"}
+    ]
+    assert {path["category"] for path in technology_paths} == {
+        "zig_technology", "mitigation_zig_technology"
+    }
+    assert all(path["validation"]["state"] == "valid" for path in technology_paths)
+    assert all(path["nodes"][-1]["id"] == "ZIG-TECH-1" for path in technology_paths)
+    assert all(path["edges"][-1]["relationship_type"] == "implements_capability" for path in technology_paths)
+    assert all(path["edges"][-1]["traversal_direction"] == "in" for path in technology_paths)
+
+    mitigation = next(item for item in bundle["mitigations"] if item["mitigation_id"] == "M0001")
+    assert mitigation["zig_technology_ids"] == ["ZIG-TECH-1"]
+    correlation = crawl_correlation(engine, "T0001")
+    assert correlation["zig_technologies"] == ["[ZIG-TECH-1] Technology"]
 
 
 def test_real_graph_bundle_keeps_native_and_cref_mitigation_paths() -> None:

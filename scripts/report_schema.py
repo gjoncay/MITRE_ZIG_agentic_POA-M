@@ -10,8 +10,8 @@ Two entry points:
 
   build_report_json(t_code, context, narrative, qa_result)
       -> plain, JSON-serializable dict mirroring every field that ends up in
-         the rendered markdown, PLUS the full (uncapped) affected_hosts list
-         for machine consumption.
+         the rendered markdown, including complete source observations and
+         presentation-compatible legacy fields.
 
   render_markdown(template_str, report_id, generated_date, t_code, context,
                    narrative, qa_result)
@@ -27,15 +27,17 @@ module never calls datetime.now() or any graph/QA code itself):
         "technique_description": str,
         "mitre_analytics": str,
         "mitre_mitigations": str,
-        "d3fend_countermeasure_1": str,
-        "d3fend_countermeasure_2": str,
+        "d3fend_countermeasure_1": str,          # legacy compatibility
+        "d3fend_countermeasure_2": str,          # legacy compatibility
+        "d3fend_countermeasures_display": str,   # full Markdown list
         "d3fend_artifacts": str,
         "zig_pillar_name": str,
         "zig_capability_id": str,
         "zig_capability_name": str,
         "zig_activity_1": str,
-        "zig_technology_1": str,
-        "zig_technology_2": str,
+        "zig_technology_1": str,                 # legacy compatibility
+        "zig_technology_2": str,                 # legacy compatibility
+        "zig_technologies_display": str,          # full Markdown list
         "cref_goal": str,
         "cref_objective": str,
         "cref_technique": str,
@@ -57,7 +59,6 @@ module never calls datetime.now() or any graph/QA code itself):
              "finding": "...", "severity": "Critical"},
             ...
         ],
-        "_display_cap": 50,                        # optional, markdown-only
         "report_id": str,                           # read by
         "generated_date": str,                      # build_report_json only
                                                       # (render_markdown gets
@@ -125,7 +126,13 @@ def build_report_json(t_code, context, narrative, qa_result):
         # D3FEND
         "d3fend_countermeasure_1": context.get("d3fend_countermeasure_1"),
         "d3fend_countermeasure_2": context.get("d3fend_countermeasure_2"),
+        "d3fend_countermeasures": context.get(
+            "d3fend_countermeasures_all", context.get("d3fend_countermeasures", [])
+        ),
         "d3fend_artifacts": context.get("d3fend_artifacts"),
+        "d3fend_artifacts_all": context.get(
+            "d3fend_artifacts_all", context.get("d3fend_artifacts", [])
+        ),
 
         # ZIG
         "zig_pillar_name": context.get("zig_pillar_name"),
@@ -134,6 +141,9 @@ def build_report_json(t_code, context, narrative, qa_result):
         "zig_activity_1": context.get("zig_activity_1"),
         "zig_technology_1": context.get("zig_technology_1"),
         "zig_technology_2": context.get("zig_technology_2"),
+        "zig_technologies": context.get(
+            "zig_technologies_all", context.get("zig_technologies", [])
+        ),
 
         # CREF
         "cref_goal": context.get("cref_goal"),
@@ -194,45 +204,25 @@ def _host_context_label(affected_hosts):
 
 
 def _build_affected_hosts_table(context):
-    """Render the {AFFECTED_HOSTS_TABLE} markdown table, capped for display.
+    """Render every source observation in the Markdown report.
 
-    Full data always lives in build_report_json()'s uncapped affected_hosts
-    list -- the cap here is purely about keeping the markdown report
-    readable. When every row is host-less (see _is_hostless), drops the
-    IP/Hostname columns entirely and dedupes identical excerpts instead of
-    repeating an "N/A | N/A" pair per row.
+    The LLM receives a separately bounded context, but the immutable review
+    artifact must retain all source observations.  Host-less CTI input still
+    uses a concise two-column shape; it no longer de-duplicates or caps rows.
     """
     affected_hosts = context.get("affected_hosts", [])
-    display_cap = context.get("_display_cap", 50)
-    finding_count = context.get("finding_count", len(affected_hosts))
 
     if _is_hostless(affected_hosts):
-        seen = []
-        for host in affected_hosts:
-            excerpt = host.get("finding", "N/A")
-            if excerpt not in seen:
-                seen.append(excerpt)
-        displayed = seen[:display_cap]
-
         lines = ["| Source Excerpt | Severity |", "|---|---|"]
-        excerpt_to_severity = {h.get("finding", "N/A"): h.get("severity", "N/A") for h in affected_hosts}
-        for excerpt in displayed:
+        for host in affected_hosts:
             lines.append(
-                f"| {_escape_table_cell(excerpt)} | "
-                f"{_escape_table_cell(excerpt_to_severity.get(excerpt, 'N/A'))} |"
+                f"| {_escape_table_cell(host.get('finding', 'N/A'))} | "
+                f"{_escape_table_cell(host.get('severity', 'N/A'))} |"
             )
-
-        if len(seen) > len(displayed):
-            remaining = len(seen) - len(displayed)
-            lines.append("")
-            lines.append(f"*...and {remaining} more excerpt(s) (see JSON for full list)*")
-
         return "\n".join(lines)
 
-    displayed = affected_hosts[:display_cap]
-
     lines = ["| IP | Hostname | Finding | Severity |", "|---|---|---|---|"]
-    for host in displayed:
+    for host in affected_hosts:
         lines.append(
             "| {ip} | {hostname} | {finding} | {severity} |".format(
                 ip=_escape_table_cell(host.get("ip", "N/A")),
@@ -241,14 +231,6 @@ def _build_affected_hosts_table(context):
                 severity=_escape_table_cell(host.get("severity", "N/A")),
             )
         )
-
-    if finding_count > len(displayed):
-        remaining = finding_count - len(displayed)
-        lines.append("")
-        lines.append(
-            f"*...and {remaining} more hosts (see JSON for full list)*"
-        )
-
     return "\n".join(lines)
 
 
@@ -271,6 +253,25 @@ def _build_severity_breakdown_str(context):
     )
 
 
+def _full_bulleted_display(values, default):
+    """Return a complete nested Markdown list for new and legacy callers."""
+    if isinstance(values, str):
+        return values or default
+    if values is None:
+        return default
+    rendered = list(dict.fromkeys(str(value) for value in values if value not in (None, "")))
+    return "\n  - " + "\n  - ".join(rendered) if rendered else default
+
+
+def _full_display_from_context(context, display_key, values_key, legacy_keys, default):
+    """Prefer full adapter output while supporting older direct callers."""
+    if display_key in context:
+        return _full_bulleted_display(context.get(display_key), default)
+    if values_key in context:
+        return _full_bulleted_display(context.get(values_key), default)
+    return _full_bulleted_display([context.get(key) for key in legacy_keys], default)
+
+
 def render_markdown(
     template_str, report_id, generated_date, t_code, context, narrative, qa_result
 ):
@@ -285,6 +286,20 @@ def render_markdown(
     severity_breakdown_str = _build_severity_breakdown_str(context)
     finding_count = context.get("finding_count", len(context.get("affected_hosts", [])))
     host_context_label = _host_context_label(context.get("affected_hosts", []))
+    d3fend_countermeasures = _full_display_from_context(
+        context,
+        "d3fend_countermeasures_display",
+        "d3fend_countermeasures",
+        ("d3fend_countermeasure_1", "d3fend_countermeasure_2"),
+        "None found in graph",
+    )
+    zig_technologies = _full_display_from_context(
+        context,
+        "zig_technologies_display",
+        "zig_technologies",
+        ("zig_technology_1", "zig_technology_2"),
+        "None found in graph",
+    )
 
     return template_str.format(
         DATE=generated_date,
@@ -304,6 +319,7 @@ def render_markdown(
         MITRE_TECHNIQUE_DESCRIPTION=context["technique_description"],
         MITRE_ANALYTICS=context["mitre_analytics"],
         MITRE_MITIGATIONS=context["mitre_mitigations"],
+        D3FEND_COUNTERMEASURES=d3fend_countermeasures,
         D3FEND_COUNTERMEASURE_1=context["d3fend_countermeasure_1"],
         D3FEND_COUNTERMEASURE_2=context["d3fend_countermeasure_2"],
         D3FEND_ARTIFACTS=context["d3fend_artifacts"],
@@ -321,6 +337,7 @@ def render_markdown(
         CREF_MITIGATION_NAME=context["cref_mitigation_name"],
         NIST_800_53_CONTROLS=context["nist_800_53_controls"],
         TRACEABILITY=context["traceability"],
+        ZIG_TECHNOLOGIES=zig_technologies,
         ZIG_TECHNOLOGY_1=context["zig_technology_1"],
         ZIG_TECHNOLOGY_2=context["zig_technology_2"],
         TECHNOLOGY_IMPLEMENTATION_NOTES=narrative["technology_implementation_notes"],
@@ -350,6 +367,11 @@ if __name__ == "__main__":
         "mitre_mitigations": "  - [M1015] Active Directory Configuration",
         "d3fend_countermeasure_1": "[D3-CRO] Credential Rotation",
         "d3fend_countermeasure_2": "[D3-AL] Audit Log Analysis",
+        "d3fend_countermeasures": [
+            "[D3-CRO] Credential Rotation",
+            "[D3-AL] Audit Log Analysis",
+            "[D3-THIRD] Full third countermeasure",
+        ],
         "d3fend_artifacts": "[DC0001] Active Directory, [DC0002] Kerberos Ticket",
         "zig_pillar_name": "Identity",
         "zig_capability_id": "1.2",
@@ -357,6 +379,11 @@ if __name__ == "__main__":
         "zig_activity_1": "[ACT-1.2.3] Enforce Kerberos pre-authentication",
         "zig_technology_1": "[TECH-01] Privileged Access Management",
         "zig_technology_2": "[TECH-02] LAPS",
+        "zig_technologies": [
+            "[TECH-01] Privileged Access Management",
+            "[TECH-02] LAPS",
+            "[TECH-03] Full third technology",
+        ],
         "cref_goal": "Recover",
         "cref_objective": "Reduce recovery time",
         "cref_technique": "Non-Persistence",
@@ -395,7 +422,7 @@ if __name__ == "__main__":
                 "severity": "High",
             },
         ],
-        "_display_cap": 2,  # deliberately small, to exercise the "N more" path
+        "_display_cap": 2,  # ignored: Markdown reports retain all observations
         "report_id": "ASMT-CONSOL-0001",
         "generated_date": "2026-07-12",
     }
@@ -444,7 +471,10 @@ if __name__ == "__main__":
         qa_result=fake_qa_result,
     )
     assert "T1558.001" in markdown
-    assert "...and 12 more hosts (see JSON for full list)" in markdown
+    assert "10.1.2.10" in markdown
+    assert "see JSON" not in markdown
+    assert "[D3-THIRD] Full third countermeasure" in markdown
+    assert "[TECH-03] Full third technology" in markdown
     assert "Critical: 3, High: 9, Medium: 2" in markdown
     print("render_markdown: OK ->", len(markdown), "chars")
 

@@ -25,6 +25,12 @@ def first_present(row, candidates, default="Unknown"):
             return str(row[col]).strip()
     return default
 
+
+def _bulleted_or_default(items, default):
+    """Render every unique display item; legacy reports are not previews."""
+    values = list(dict.fromkeys(str(item) for item in items if item not in (None, "")))
+    return "\n  - " + "\n  - ".join(values) if values else default
+
 def generate_reports(input_csv, limit):
     print("LEGACY EXAMPLE: use run_analyst_pipeline.py for supported report generation.")
     print("Initializing Knowledge Graph Engine (loading vectors)...")
@@ -102,7 +108,7 @@ def generate_reports(input_csv, limit):
                 elif ntype in ('defensive_artifact', 'attack_datacomponent'):
                     d3fend_artifacts.append(f"[{nid}] {ndata.get('name', nid)}")
                 elif ntype == 'attack_analytic':
-                    analytics.append(f"[{nid}] {ndata.get('description', ndata.get('name', 'Analytic'))[:120]}")
+                    analytics.append(f"[{nid}] {ndata.get('description', ndata.get('name', 'Analytic'))}")
                 elif ntype == 'attack_mitigation':
                     mitigations.append(f"[{nid}] {ndata.get('name', 'Mitigation')}")
 
@@ -121,11 +127,12 @@ def generate_reports(input_csv, limit):
                 elif src_type == 'cref_mitigation' and edge.get('relationship_type') == 'mitigates':
                     cref_mitigations.append((source_id, src_data))
 
-        d3fend_cm_1 = d3fend_countermeasures[0] if len(d3fend_countermeasures) > 0 else "None found in graph"
-        d3fend_cm_2 = d3fend_countermeasures[1] if len(d3fend_countermeasures) > 1 else "None found in graph"
-        d3fend_art_str = ", ".join(d3fend_artifacts[:3]) if d3fend_artifacts else "None found in graph"
-        mitre_analytics_str = ("\n  - " + "\n  - ".join(analytics[:2])) if analytics else "None specified"
-        mitre_mitigations_str = ("\n  - " + "\n  - ".join(mitigations[:2])) if mitigations else "None specified"
+        d3fend_countermeasures_str = _bulleted_or_default(
+            d3fend_countermeasures, "None found in graph"
+        )
+        d3fend_art_str = ", ".join(dict.fromkeys(d3fend_artifacts)) if d3fend_artifacts else "None found in graph"
+        mitre_analytics_str = _bulleted_or_default(analytics, "None specified")
+        mitre_mitigations_str = _bulleted_or_default(mitigations, "None specified")
 
         # 3. Zero Trust (ZIG) Correlation
         # Prefer the direct zig_activity -> attack_technique edge (sourced from the
@@ -264,6 +271,10 @@ def generate_reports(input_csv, limit):
             imm_action = f"Investigate and patch/reconfigure {hostname} ({ip})."
 
         # 4. Generate Output Markdown
+        zig_technologies_str = _bulleted_or_default(
+            [f"[{technology_id}] {technology.get('name', technology_id)}" for technology_id, technology in zig_techs],
+            "None found in graph",
+        )
         report_content = template.format(
             DATE=datetime.now().strftime('%Y-%m-%d'),
             ASSESSMENT_ID=f"ASMT-{index+1000}",
@@ -276,8 +287,7 @@ def generate_reports(input_csv, limit):
             MITRE_TECHNIQUE_DESCRIPTION=mitre_node_data.get('description', 'Unknown').split('.')[0] + ".",
             MITRE_ANALYTICS=mitre_analytics_str,
             MITRE_MITIGATIONS=mitre_mitigations_str,
-            D3FEND_COUNTERMEASURE_1=d3fend_cm_1,
-            D3FEND_COUNTERMEASURE_2=d3fend_cm_2,
+            D3FEND_COUNTERMEASURES=d3fend_countermeasures_str,
             D3FEND_ARTIFACTS=d3fend_art_str,
             CSA_NAME=csa_name,
             CSA_IMPACT_SUMMARY=csa_impact_summary,
@@ -285,8 +295,7 @@ def generate_reports(input_csv, limit):
             ZIG_CAPABILITY_ID=zig_cap_id,
             ZIG_CAPABILITY_NAME=zig_cap_name,
             ZIG_ACTIVITY_1=f"[{zig_activity_id}] {zig_activity_name}" if zig_activities_direct else "Identify and remediate vulnerable configurations",
-            ZIG_TECHNOLOGY_1=f"[{zig_techs[0][0]}] {zig_techs[0][1].get('name')}" if len(zig_techs) > 0 else "None found in graph",
-            ZIG_TECHNOLOGY_2=f"[{zig_techs[1][0]}] {zig_techs[1][1].get('name')}" if len(zig_techs) > 1 else "None found in graph",
+            ZIG_TECHNOLOGIES=zig_technologies_str,
             CREF_GOAL=cref_goal,
             CREF_OBJECTIVE=cref_objective,
             CREF_TECHNIQUE=cref_technique_name,

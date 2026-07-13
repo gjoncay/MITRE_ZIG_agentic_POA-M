@@ -27,7 +27,7 @@
   },
   "graph_schema_version": "2",
   "graph_snapshot_id": "sha256:c80084453b6ec9823f23777705dcc6625b424a2e84d5c50950be4881315bb2e8",
-  "mapping_matrix_version": "1.0",
+  "mapping_matrix_version": "1.1",
   "multi_edge_preserving": true,
   "node_count": 5618,
   "node_csv_hashes": {
