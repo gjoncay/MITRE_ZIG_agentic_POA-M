@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cancelRun, getRun, getRunEventsUrl, normalizeJobEvent, retryRun } from "../api/client";
+import { approveRunReviewPendingReports, cancelRun, getRun, getRunEventsUrl, normalizeJobEvent, retryRun } from "../api/client";
 import type { JobEvent, RunSnapshot } from "../types";
 import { formatDate, formatDuration, getProgressPair, isTerminalRun, runNeedsReview, statusTone, titleCase } from "../utils/presentation";
 
@@ -13,6 +13,7 @@ interface ProgressViewProps {
 
 const SNAPSHOT_INTERVAL_MS = 4000;
 const EVENT_LIMIT = 80;
+const DEFAULT_BULK_REVIEW_REASON = "Bulk approval after review by the local operator.";
 
 /**
  * Durable run monitor. SSE supplies narrative events and near-real-time progress;
@@ -25,6 +26,11 @@ export default function ProgressView({ runId, onOpenRun, onOpenReports, onReview
   const [streamState, setStreamState] = useState<"connecting" | "live" | "fallback">("connecting");
   const [canceling, setCanceling] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [bulkReviewOpen, setBulkReviewOpen] = useState(false);
+  const [bulkReviewReason, setBulkReviewReason] = useState(DEFAULT_BULK_REVIEW_REASON);
+  const [bulkReviewing, setBulkReviewing] = useState(false);
+  const [bulkReviewError, setBulkReviewError] = useState<string | null>(null);
+  const [bulkReviewNotice, setBulkReviewNotice] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const lastSequence = useRef<number>(0);
   const runGeneration = useRef(0);
@@ -95,6 +101,11 @@ export default function ProgressView({ runId, onOpenRun, onOpenReports, onReview
     setStreamState("connecting");
     setCanceling(false);
     setRetrying(false);
+    setBulkReviewOpen(false);
+    setBulkReviewReason(DEFAULT_BULK_REVIEW_REASON);
+    setBulkReviewing(false);
+    setBulkReviewError(null);
+    setBulkReviewNotice(null);
     void loadSnapshot();
 
     const poll = () => { if (!disposed) void loadSnapshot(); };
@@ -154,6 +165,8 @@ export default function ProgressView({ runId, onOpenRun, onOpenReports, onReview
   const cancellationPending = Boolean(run && run.cancel_requested && !workStopped);
   const canCancel = run && ["queued", "pending", "running", "analysis_finished"].includes(run.status) && !run.cancel_requested && !canceling;
   const canRetry = run && ["failed", "canceled"].includes(run.status) && !retrying;
+  const pendingReviewCount = run?.progress.reports_review_pending ?? 0;
+  const canBulkReview = Boolean(run && requiresReview && pendingReviewCount > 0 && !bulkReviewing);
 
   const metricRows = useMemo(() => [
     ["Artifacts", run?.progress.artifacts_completed, run?.progress.artifacts_total],
@@ -180,18 +193,37 @@ export default function ProgressView({ runId, onOpenRun, onOpenReports, onReview
     if (!run || !canRetry) return;
     setRetrying(true);
     try {
-      const cloudAcknowledged = !run.retry_requires_cloud_acknowledgement || window.confirm(
-        `Retry uses ${run.retry_provider || "the selected cloud provider"} and will send the retained artifact evidence and bounded graph context to that provider. Continue?`,
-      );
-      if (!cloudAcknowledged) {
-        setRetrying(false);
-        return;
-      }
-      const retry = await retryRun(run.id, cloudAcknowledged);
+      const retry = await retryRun(run.id);
       onOpenRun(retry.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create a retry run.");
       setRetrying(false);
+    }
+  }
+
+  async function handleBulkReview() {
+    if (!run || !canBulkReview) return;
+    const reason = bulkReviewReason.trim();
+    if (!reason) {
+      setBulkReviewError("Enter a shared reason for this auditable bulk decision.");
+      return;
+    }
+    if (run.version === undefined) {
+      setBulkReviewError("Refresh the run before applying a bulk review decision.");
+      return;
+    }
+    setBulkReviewing(true);
+    setBulkReviewError(null);
+    try {
+      const result = await approveRunReviewPendingReports(run.id, { reason, version: run.version });
+      setRun(result.run);
+      setBulkReviewOpen(false);
+      setBulkReviewNotice(`${result.approvedCount} pending report${result.approvedCount === 1 ? " was" : "s were"} marked reviewed and approved.`);
+      void loadSnapshot();
+    } catch (caught) {
+      setBulkReviewError(caught instanceof Error ? caught.message : "Unable to record the bulk review decision.");
+    } finally {
+      setBulkReviewing(false);
     }
   }
 
@@ -245,13 +277,14 @@ export default function ProgressView({ runId, onOpenRun, onOpenReports, onReview
 
       {run?.degraded_reason ? <div className="mt-4 rounded-md border px-4 py-3 text-sm" style={{ borderColor: "var(--accent-warning)", backgroundColor: "var(--accent-warning-glow)", color: "var(--accent-warning)" }}><strong>Degraded analysis:</strong> {run.degraded_reason}. A reviewer should validate affected mappings before approval.</div> : null}
       {run?.effective_provider ? <p className="mt-3 text-xs" style={{ color: "var(--text-muted)" }}>Provider: {run.effective_provider}{run.model ? ` · model ${run.model}` : ""}</p> : null}
+      {bulkReviewNotice ? <div className="mt-4 rounded-md border px-4 py-3 text-sm" style={{ borderColor: "var(--accent-positive)", backgroundColor: "var(--accent-positive-glow)", color: "var(--accent-positive)" }}>{bulkReviewNotice}</div> : null}
       {failed ? <div className="mt-4 rounded-md border px-4 py-3 text-sm" style={{ borderColor: "var(--accent-negative)", backgroundColor: "var(--accent-negative-glow)", color: "var(--accent-negative)" }}><strong>Run failed:</strong> {run.error || "The service did not provide a reason."}</div> : null}
       {canceled ? <div className="mt-4 rounded-md border px-4 py-3 text-sm" style={{ borderColor: "var(--accent-warning)", backgroundColor: "var(--accent-warning-glow)", color: "var(--accent-warning)" }}>This run was canceled. Already-published reports remain available for review.</div> : null}
 
       {run && workStopped && !failed && !canceled ? (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-4 rounded-lg border p-4" style={{ borderColor: requiresReview ? "var(--accent-warning)" : "var(--accent-positive)", backgroundColor: requiresReview ? "var(--accent-warning-glow)" : "var(--accent-positive-glow)" }}>
           <div><h3 className="font-semibold" style={{ color: requiresReview ? "var(--accent-warning)" : "var(--accent-positive)" }}>{requiresReview ? "Analysis finished; review is still required" : "All required reports have passed"}</h3><p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{requiresReview ? "The run remains open until every flagged or manual-review report receives a decision." : "The run has reached its acceptance gate."}</p></div>
-          <div className="flex gap-2">{requiresReview ? <button type="button" onClick={onReview} className="rounded-md px-3 py-2 text-sm font-semibold text-white" style={{ backgroundColor: "var(--accent-warning)" }}>Open review queue</button> : null}<button type="button" onClick={() => onOpenReports(run.id, run.report_ids[0])} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>View reports</button></div>
+          <div className="flex flex-wrap gap-2">{canBulkReview ? <button type="button" onClick={() => { setBulkReviewError(null); setBulkReviewOpen(true); }} className="rounded-md px-3 py-2 text-sm font-semibold text-white" style={{ backgroundColor: "var(--accent-positive)" }}>Mark all {pendingReviewCount} pending report{pendingReviewCount === 1 ? "" : "s"} reviewed</button> : null}{requiresReview ? <button type="button" onClick={onReview} className="rounded-md px-3 py-2 text-sm font-semibold text-white" style={{ backgroundColor: "var(--accent-warning)" }}>Open review queue</button> : null}<button type="button" onClick={() => onOpenReports(run.id, run.report_ids[0])} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>View reports</button></div>
         </div>
       ) : null}
 
@@ -259,6 +292,15 @@ export default function ProgressView({ runId, onOpenRun, onOpenReports, onReview
         <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: "var(--border-default)" }}><div><div className="data-label">Analyst event log</div><h3 className="font-semibold" style={{ color: "var(--text-primary)" }}>Recent activity</h3></div><span className="text-xs" style={{ color: "var(--text-muted)" }}>{events.length} live event{events.length === 1 ? "" : "s"}</span></div>
         {events.length === 0 ? <p className="px-4 py-6 text-sm" style={{ color: "var(--text-secondary)" }}>Waiting for persisted progress events. Snapshot polling will continue if the event stream is unavailable.</p> : <ol className="custom-scrollbar max-h-80 overflow-y-auto">{events.map((event, index) => <li key={`${event.sequence ?? "event"}-${event.id ?? index}`} className="border-b px-4 py-3 last:border-b-0" style={{ borderColor: "var(--border-subtle)" }}><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{event.stage || titleCase(event.type)}</span><span className="text-xs" style={{ color: "var(--text-muted)" }}>{formatDate(event.timestamp)}</span></div>{event.message ? <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{event.message}</p> : null}</li>)}</ol>}
       </div>
+      {bulkReviewOpen && run ? <BulkReviewDialog
+        pendingCount={pendingReviewCount}
+        reason={bulkReviewReason}
+        saving={bulkReviewing}
+        error={bulkReviewError}
+        onReasonChange={setBulkReviewReason}
+        onCancel={() => { if (!bulkReviewing) setBulkReviewOpen(false); }}
+        onConfirm={() => void handleBulkReview()}
+      /> : null}
     </section>
   );
 }
@@ -270,4 +312,8 @@ function ProgressMetric({ label, completed, total }: { label: string; completed?
 
 function CounterCard({ label, value, color }: { label: string; value: number; color: string }) {
   return <div className="rounded-lg border px-4 py-3" style={{ borderColor: "var(--border-default)", backgroundColor: "var(--bg-surface)" }}><div className="data-label">{label}</div><div className="mt-1 text-xl font-semibold" style={{ color }}>{value}</div></div>;
+}
+
+function BulkReviewDialog({ pendingCount, reason, saving, error, onReasonChange, onCancel, onConfirm }: { pendingCount: number; reason: string; saving: boolean; error: string | null; onReasonChange: (value: string) => void; onCancel: () => void; onConfirm: () => void }) {
+  return <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="bulk-review-title" style={{ backgroundColor: "var(--bg-scrim)" }}><div className="w-full max-w-xl rounded-lg border p-5 shadow-lg" style={{ borderColor: "var(--border-default)", backgroundColor: "var(--bg-overlay)" }}><h2 id="bulk-review-title" className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>Mark all pending reports reviewed?</h2><p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>This approves the {pendingCount} report{pendingCount === 1 ? "" : "s"} currently awaiting review in this run only. The service records a separate, immutable approval decision for every report, using your server-side local identity.</p><label className="data-label mt-4 block" htmlFor="bulk-review-reason">Shared audit reason</label><textarea id="bulk-review-reason" value={reason} onChange={(event) => onReasonChange(event.target.value)} rows={3} disabled={saving} className="mt-2 w-full resize-y rounded-md border p-3 text-sm outline-none disabled:opacity-50" style={{ backgroundColor: "var(--bg-base)", borderColor: "var(--border-default)", color: "var(--text-primary)" }} />{error ? <p className="mt-3 text-sm" style={{ color: "var(--accent-negative)" }}>{error}</p> : null}<div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onCancel} disabled={saving} className="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>Cancel</button><button type="button" onClick={onConfirm} disabled={saving || !reason.trim()} className="rounded-md px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" style={{ backgroundColor: "var(--accent-positive)" }}>{saving ? "Recording approvals…" : `Approve ${pendingCount} report${pendingCount === 1 ? "" : "s"}`}</button></div></div></div>;
 }

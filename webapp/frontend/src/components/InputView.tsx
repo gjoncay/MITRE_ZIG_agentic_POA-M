@@ -1,18 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import type { Provider } from "../types";
-import { createRun, getSubmissionPolicy } from "../api/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createRun, getLocalModels } from "../api/client";
 
 interface InputViewProps {
   onJobStarted: (jobId: string) => void;
 }
-
-const PROVIDER_OPTIONS: { value: Provider; label: string }[] = [
-  { value: "", label: "Server default" },
-  { value: "local", label: "Local" },
-  { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Gemini" },
-  { value: "none", label: "Heuristic (no LLM)" },
-];
 
 const ACCEPTED_EXTENSIONS = [".xlsx", ".xls", ".csv", ".json", ".txt", ".md"];
 
@@ -21,25 +12,40 @@ const ACCEPTED_EXTENSIONS = [".xlsx", ".xls", ".csv", ".json", ".txt", ".md"];
 export default function InputView({ onJobStarted }: InputViewProps) {
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [provider, setProvider] = useState<Provider>("");
-  const [cloudAcknowledged, setCloudAcknowledged] = useState(false);
-  const [serverDefaultRequiresCloudAck, setServerDefaultRequiresCloudAck] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [model, setModel] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelSource, setModelSource] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const usesCloudProvider = provider === "openai" || provider === "gemini";
-  const requiresCloudAck = usesCloudProvider || (provider === "" && serverDefaultRequiresCloudAck);
-  const canSubmit = (text.trim().length > 0 || file !== null) && !submitting && (!requiresCloudAck || cloudAcknowledged);
+  const loadModels = useCallback(async () => {
+    setModelsLoading(true);
+    setModelsError(null);
+    try {
+      const inventory = await getLocalModels();
+      setModels(inventory.models);
+      setModel((current) => current && inventory.models.includes(current) ? current : inventory.models[0] || "");
+      setModelSource(inventory.source === "ollama" ? "Ollama" : inventory.source === "openai_compatible" ? "OpenAI-compatible local server" : null);
+      if (inventory.error) setModelsError(inventory.error);
+      else if (!inventory.configured || inventory.models.length === 0) setModelsError("No local model is configured or available. Start your local model server, then refresh this list.");
+    } catch (caught) {
+      setModels([]);
+      setModel("");
+      setModelsError(caught instanceof Error ? caught.message : "Unable to discover local models.");
+    } finally {
+      setModelsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let canceled = false;
-    void getSubmissionPolicy()
-      .then((policy) => { if (!canceled) setServerDefaultRequiresCloudAck(policy.cloudAcknowledgementRequired); })
-      .catch(() => { /* The submit endpoint remains the policy authority. */ });
-    return () => { canceled = true; };
-  }, []);
+    void loadModels();
+  }, [loadModels]);
+
+  const canSubmit = (text.trim().length > 0 || file !== null) && !submitting && !modelsLoading && Boolean(model);
 
   function handleFileChange(f: File | null) {
     setFile(f);
@@ -61,12 +67,12 @@ export default function InputView({ onJobStarted }: InputViewProps) {
       const run = await createRun({
         text: file ? undefined : text.trim() || undefined,
         file: file ?? undefined,
-        provider: provider || undefined,
-        cloudAcknowledged,
+        provider: "local",
+        model,
       });
       onJobStarted(run.id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to start analysis.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Failed to start analysis.");
       setSubmitting(false);
     }
   }
@@ -168,43 +174,30 @@ export default function InputView({ onJobStarted }: InputViewProps) {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <label className="data-label" htmlFor="provider-select">
-            LLM provider
-          </label>
-          <select
-            id="provider-select"
-            value={provider}
-            onChange={(e) => {
-              const next = e.target.value as Provider;
-              setProvider(next);
-              if (next !== "openai" && next !== "gemini") setCloudAcknowledged(false);
-            }}
-            className="rounded-md border px-3 py-1.5 text-sm outline-none"
-            style={{
-              backgroundColor: "var(--bg-surface)",
-              borderColor: "var(--border-default)",
-              color: "var(--text-primary)",
-            }}
-          >
-            {PROVIDER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+      <div className="rounded-lg border p-4" style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-default)" }}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <label className="data-label block" htmlFor="local-model-select">Local model</label>
+            <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>Only models exposed by this server's configured local endpoint are available. Submitted evidence is not sent to a cloud provider.</p>
+          </div>
+          <button type="button" onClick={() => void loadModels()} disabled={modelsLoading} className="rounded-md border px-3 py-1.5 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>{modelsLoading ? "Checking models…" : "Refresh models"}</button>
         </div>
+        <select
+          id="local-model-select"
+          value={model}
+          onChange={(event) => setModel(event.target.value)}
+          disabled={modelsLoading || models.length === 0}
+          className="mt-3 w-full rounded-md border px-3 py-2 text-sm outline-none disabled:opacity-50"
+          style={{ backgroundColor: "var(--bg-base)", borderColor: "var(--border-default)", color: "var(--text-primary)" }}
+        >
+          {models.length === 0 ? <option value="">{modelsLoading ? "Discovering local models…" : "No local models found"}</option> : null}
+          {models.map((availableModel) => <option key={availableModel} value={availableModel}>{availableModel}</option>)}
+        </select>
+        {modelSource ? <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>Discovered through {modelSource}.</p> : null}
+        {modelsError ? <p className="mt-2 text-sm" style={{ color: models.length > 0 ? "var(--accent-warning)" : "var(--accent-negative)" }}>{modelsError}</p> : null}
+      </div>
 
-        {requiresCloudAck ? (
-          <label className="flex max-w-xl items-start gap-2 rounded-md border px-3 py-2 text-xs" style={{ borderColor: "var(--accent-warning)", backgroundColor: "var(--accent-warning-glow)", color: "var(--text-primary)" }}>
-            <input type="checkbox" checked={cloudAcknowledged} onChange={(event) => setCloudAcknowledged(event.target.checked)} className="mt-0.5" />
-            <span>{usesCloudProvider
-              ? "I understand that the submitted artifact text and bounded graph context will be sent to the selected cloud LLM provider for narrative/QA and optional graph-tool planning."
-              : "I understand that the server default is configured for cloud LLM use, so the submitted artifact text and bounded graph context may be sent for narrative/QA and optional graph-tool planning."}</span>
-          </label>
-        ) : null}
-
+      <div className="flex flex-wrap items-center justify-end gap-4">
         <button
           type="button"
           onClick={handleSubmit}
@@ -212,7 +205,7 @@ export default function InputView({ onJobStarted }: InputViewProps) {
           className="rounded-md px-5 py-2 text-sm font-semibold text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
           style={{ backgroundColor: "var(--accent-primary)" }}
         >
-          {submitting ? "Starting…" : "Analyze"}
+          {submitting ? "Starting…" : "Analyze locally"}
         </button>
       </div>
 

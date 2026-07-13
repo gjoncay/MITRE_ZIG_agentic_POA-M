@@ -97,7 +97,7 @@ function makeForm(args: AnalyzeArgs): FormData {
   if (args.file) form.append("file", args.file);
   else if (args.text) form.append("text", args.text);
   if (args.provider) form.append("provider", args.provider);
-  if (args.cloudAcknowledged) form.append("cloud_acknowledged", "true");
+  if (args.model?.trim()) form.append("model", args.model.trim());
   return form;
 }
 
@@ -118,12 +118,10 @@ function normalizeRun(raw: unknown): RunSnapshot {
     finished_at: asString(item.finished_at || item.finished, "") || undefined,
     requested_provider: asString(item.requested_provider || item.provider, "") || undefined,
     effective_provider: asString(item.effective_provider, "") || undefined,
-    model: asString(item.model || item.effective_model, "") || undefined,
+    model: asString(item.model || item.effective_model || item.requested_model, "") || undefined,
     degraded_reason: item.degraded_reason == null ? null : asString(item.degraded_reason),
     review_required: Boolean(item.review_required || item.requires_review),
     review_gate: item.review_gate == null ? null : asString(item.review_gate),
-    retry_provider: asString(item.retry_provider, "") || undefined,
-    retry_requires_cloud_acknowledgement: Boolean(item.retry_requires_cloud_acknowledgement),
     cancel_requested: Boolean(item.cancel_requested),
     progress,
     metrics: asProgress(item.metrics),
@@ -229,13 +227,21 @@ export interface AnalyzeArgs {
   text?: string;
   file?: File;
   provider?: Provider;
-  /** Required by the server before raw evidence is sent to a cloud provider. */
-  cloudAcknowledged?: boolean;
+  /** A model identifier returned by the server's configured local endpoint. */
+  model?: string;
 }
 
-export interface SubmissionPolicy {
-  defaultProvider: string;
-  cloudAcknowledgementRequired: boolean;
+export interface LocalModelsResponse {
+  provider: "local";
+  configured: boolean;
+  models: string[];
+  source: "openai_compatible" | "ollama" | null;
+  error: string | null;
+}
+
+export interface BulkReviewResult {
+  run: RunSnapshot;
+  approvedCount: number;
 }
 
 export interface BrowserSession {
@@ -286,19 +292,22 @@ export async function refreshBrowserSession(): Promise<BrowserSession> {
   return getBrowserSession();
 }
 
-/** Read the non-sensitive provider policy used to make the submit UI honest. */
-export async function getSubmissionPolicy(): Promise<SubmissionPolicy> {
-  try {
-    const raw = await requestJson<unknown>("/config");
-    const item = asRecord(raw);
-    return {
-      defaultProvider: asString(item.default_provider, "none"),
-      cloudAcknowledgementRequired: Boolean(item.cloud_acknowledgement_required),
-    };
-  } catch (error) {
-    if (isMissingRoute(error)) return { defaultProvider: "unknown", cloudAcknowledgementRequired: false };
-    throw error;
-  }
+/**
+ * Discover models from the operator-configured local endpoint.  The browser
+ * never supplies an endpoint URL or sees an API key; this is strictly a
+ * server-side inventory of the configured local service.
+ */
+export async function getLocalModels(): Promise<LocalModelsResponse> {
+  const raw = await requestJson<unknown>("/local-models");
+  const item = asRecord(raw);
+  const source = asString(item.source);
+  return {
+    provider: "local",
+    configured: Boolean(item.configured),
+    models: asStringArray(item.models),
+    source: source === "openai_compatible" || source === "ollama" ? source : null,
+    error: item.error == null ? null : asString(item.error),
+  };
 }
 
 /** POST /api/runs.  Older deployments receive a compatibility request to /api/analyze. */
@@ -372,13 +381,40 @@ export async function cancelRun(runId: string, version?: string | number): Promi
 }
 
 /** Create an isolated retry run from the retained immutable source artifact. */
-export async function retryRun(runId: string, cloudAcknowledged = false): Promise<RunSnapshot> {
+/** Retry a retained source artifact using the local provider only. */
+export async function retryRun(runId: string, model?: string): Promise<RunSnapshot> {
   const raw = await requestJson<unknown>(`/runs/${encodeURIComponent(runId)}/retry`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cloud_acknowledged: cloudAcknowledged }),
+    body: JSON.stringify(model?.trim() ? { model: model.trim() } : {}),
   });
   return normalizeRun(raw);
+}
+
+/**
+ * Approve every report that is currently review-pending in one run.
+ *
+ * The backend writes an individual review decision for each report and uses
+ * the server-derived actor.  A run version is required so a stale browser
+ * cannot accidentally approve reports that appeared after the confirmation.
+ */
+export async function approveRunReviewPendingReports(
+  runId: string,
+  args: { reason: string; version?: string | number },
+): Promise<BulkReviewResult> {
+  const raw = await requestJson<unknown>(`/runs/${encodeURIComponent(runId)}/review-pending/approve`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(args.version === undefined ? {} : { "If-Match": String(args.version) }),
+    },
+    body: JSON.stringify({ reason: args.reason, version: args.version }),
+  });
+  const item = asRecord(raw);
+  return {
+    run: normalizeRun(item.run ?? item),
+    approvedCount: asNumber(item.approved_count),
+  };
 }
 
 /** URL used by EventSource.  Last-Event-ID is automatically managed by the browser after reconnect. */
@@ -529,11 +565,11 @@ export async function rerenderReport(reportId: string): Promise<ReportDetail> {
 }
 
 /** Retry the entire retained source run that produced this report. */
-export async function retrySourceRunForReport(reportId: string, cloudAcknowledged = false): Promise<RunSnapshot> {
+export async function retrySourceRunForReport(reportId: string): Promise<RunSnapshot> {
   const raw = await requestJson<unknown>(`/reports/${encodeURIComponent(reportId)}/retry-source-run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cloud_acknowledged: cloudAcknowledged }),
+    body: JSON.stringify({}),
   });
   return normalizeRun(raw);
 }

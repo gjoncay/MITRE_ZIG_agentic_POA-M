@@ -57,16 +57,16 @@ An interactive walkthrough of the agent query pattern is in
 | `scripts/ingest_assessment.py` | Flattens multi-tab, arbitrary-schema assessment reports into `processed_assessment.csv` (+ optional embeddings) |
 | `agent_batch_processor.py` | Batch: finding → T-code → D3FEND → ZIG → filled `assessment_template.md` |
 | `scripts/consolidate_findings.py` | Groups CSV rows by ATT&CK technique so the graph crawl runs once per technique, not once per row |
-| `scripts/llm_providers.py` | `get_provider()` — pluggable narrative/proofread/QA drafting (local/OpenAI/Gemini), degrading to a network-free heuristic fallback |
+| `scripts/llm_providers.py` | `get_provider()` — local-model narrative/proofread/QA drafting, degrading to a network-free heuristic fallback when the local model is unavailable |
 | `scripts/report_schema.py` | `build_report_json` / `render_markdown` — fills `assessment_template_consolidated.md` and its JSON twin |
 | `assessment_template_consolidated.md` | Template for one-technique-many-hosts consolidated reports, incl. QA/QC section |
-| `run_analyst_pipeline.py` | CLI: consolidate findings by technique, draft/proofread/QA via `--provider`, write `reports/*.md` + `*.json` |
+| `run_analyst_pipeline.py` | CLI: consolidate findings by technique, draft/proofread/QA with a local model via `--provider local` and optional `--model`, write `reports/*.md` + `*.json` |
 | `consolidate_mitre_data.py` | Regenerates `mitre_nodes.csv` / `mitre_edges.csv` / `ontology.json` from the raw ATT&CK xlsx + D3FEND csv/ods |
 | `scripts/parse_zig_data.py` | Regenerates `zig_nodes.csv` / `zig_edges.csv` from the ZIG PDF text extracts |
 | `consolidate_cref_data.py` | Regenerates `cref_nodes.csv` / `cref_edges.csv` from `CREF/*.csv`, and reconciles the DoD ZT pillar/capability/activity taxonomy into the existing `zig_*.csv` (never re-run `scripts/parse_zig_data.py` afterward — it would overwrite the reconciliation) |
 | `build_deployment_guide.py` | Regenerates `Air_Gapped_Deployment_Guide.md` from the live source files — run after any code change |
 | `build_cref_extension_guide.py` | Regenerates `CREF_ZERO_TRUST_EXTENSION_GUIDE.md` — a delta guide for applying the CREF/NIST/CSA layer to an already-deployed air-gapped instance |
-| `build_pipeline_addendum_guide.py` | Regenerates `ANALYST_PIPELINE_ADDENDUM_GUIDE.md` — a delta guide for adding the multi-provider analyst/proofreader/QA consolidation pipeline (backend only, no web UI/Docker/Tailscale) to an already-deployed air-gapped instance |
+| `build_pipeline_addendum_guide.py` | Regenerates `ANALYST_PIPELINE_ADDENDUM_GUIDE.md` — a delta guide for adding the local-model analyst/proofreader/QA consolidation pipeline (backend only, no web UI/Docker/Tailscale) to an already-deployed air-gapped instance |
 | `build_portable_bundle.py` | Regenerates `PORTABLE_RECONSTRUCTION_BUNDLE.md` — single-document, checksum-verified code transfer for text-only CDS |
 | `import_to_neo4j.py` | Optional Neo4j loader (nodes + typed relationships) |
 
@@ -85,25 +85,27 @@ python3 build_pipeline_addendum_guide.py # keep the analyst-pipeline addendum in
 python3 build_portable_bundle.py        # keep the CDS-transfer bundle in sync
 ```
 
-## Multi-Provider Analyst Pipeline
+## Local-Only Analyst Pipeline
 
 `run_analyst_pipeline.py` consolidates `processed_assessment.csv` findings by
 ATT&CK technique (one report per technique, covering every affected host). A single
 finding or threat-intelligence artifact can produce multiple reports when it contains
 multiple explicit ATT&CK IDs or canonical ATT&CK technique names; each report's JSON
 preserves every direct graph-backed ZIG, CREF, NIST, and CSA relationship. It then
-drafts/proofreads/QA-reviews each report via a pluggable LLM provider, chosen
-with the `LLM_PROVIDER` env var (or `--provider`):
+drafts/proofreads/QA-reviews each report with a local LLM when one is
+configured. Hosted-provider selection is intentionally disabled: submitted
+evidence is never sent to OpenAI, Gemini, or another external LLM service.
 
-| `LLM_PROVIDER` | Backend |
+| `LLM_PROVIDER` / `--provider` | Behavior |
 |---|---|
 | `local` | Any OpenAI-compatible local server (Ollama, LM Studio, vLLM, llama.cpp) |
-| `openai` | Hosted OpenAI API (needs `OPENAI_API_KEY`) |
-| `gemini` | Hosted Google Gemini API (needs `GEMINI_API_KEY`) |
-| `none` (or unset) | Deterministic heuristic fallback — **the safe default**: no API keys, no network access, air-gap-friendly |
+| `none` (or unset, CLI only) | Deterministic heuristic fallback — no model-network call |
+| `openai` or `gemini` | Disabled; resolves to the network-free heuristic fallback with a warning |
 
-Any missing package/key falls back to `none` automatically with a warning —
-it never raises. Run it with:
+Use `LOCAL_LLM_MODEL` or the CLI's `--model` option to choose a locally
+installed model for a single run. If the local provider package or endpoint is
+unavailable, the pipeline falls back to the deterministic, network-free mode
+with a warning rather than contacting a cloud provider. Run it with:
 
 ```bash
 python3 run_analyst_pipeline.py
@@ -137,23 +139,30 @@ Bring it up with:
 
 ```bash
 mkdir -p data && chmod 700 data
-cp .env.example .env          # set TS_AUTHKEY, APP_UID/APP_GID, and a production auth token map; chmod 600 .env
+cp .env.example .env          # set TS_AUTHKEY, APP_UID/APP_GID, local LLM settings, and an auth mode; chmod 600 .env
 docker compose config --quiet
 docker compose up -d --build
 ```
 
-`LLM_PROVIDER=none` is the default. `local` points to an OpenAI-compatible
-local endpoint; `openai` and `gemini` require a per-submission cloud-egress
-acknowledgement because supplied evidence is sent to that provider. The model
-can use a bounded, read-only graph-tool crawl; deterministic validated graph
-paths remain the mapping authority. The progress screen records every graph
-planner request and graph-tool action; an interrupted service shutdown safely
+The web application accepts only `local` as its LLM provider. Set
+`LOCAL_LLM_BASE_URL` to the local server reachable from Compose (usually
+`http://host.docker.internal:11434/v1` for a host Ollama server) and optionally
+set `LOCAL_LLM_MODEL` as the default. The submission screen discovers models
+from that configured endpoint and lets you choose an installed model per run;
+the endpoint URL and local API key are never exposed in the UI. The model can
+use a bounded, read-only graph-tool crawl, while deterministic validated graph
+paths remain the mapping authority. The progress screen records graph-planner
+requests and graph-tool actions; an interrupted service shutdown safely
 requeues work for clean replay from the retained source artifact on restart.
 
-Production web access also requires either `CSDH_AUTH_MODE=token` with a
-nonempty `CSDH_AUTH_TOKENS_JSON` map, or a correctly configured authenticated
-reverse proxy in `trusted_proxy` mode. The server derives reviewer/deletion
-actors from that identity; `disabled` is only for explicit local development.
+Application authentication is optional for a deliberately private,
+single-operator Tailnet deployment. Set `CSDH_AUTH_MODE=disabled` in the local
+`.env` to remove the bearer-token prompt; in that mode, the Tailnet's device
+access and ACLs are the access boundary and reviewer actions still retain an
+audit record. Use `token` mode with a nonempty `CSDH_AUTH_TOKENS_JSON` map, or
+an authenticated `trusted_proxy`, for a shared Tailnet, multiple operators, or
+any additional ingress. Application authentication remains useful defense in
+depth if Tailnet membership or ACLs ever broaden.
 
 Use [WEB_DEPLOYMENT_OPERATIONS.md](WEB_DEPLOYMENT_OPERATIONS.md) for the full
 first-start, UID/GID, backup/restore, retention, image-pinning, and incident

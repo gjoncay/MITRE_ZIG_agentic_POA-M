@@ -12,12 +12,16 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import pandas as pd
 
@@ -55,6 +59,202 @@ MAX_JSON_OBSERVATIONS = 10_000
 MAX_JSON_NODES = 50_000
 MAX_JSON_NESTING = 64
 MAX_NORMALIZED_OBSERVATIONS = 10_000
+LOCAL_MODEL_NAME_MAX_LENGTH = 256
+LOCAL_MODEL_DISCOVERY_TIMEOUT_SECONDS = 3.0
+LOCAL_MODEL_DISCOVERY_MAX_RESPONSE_BYTES = 1_000_000
+LOCAL_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
+
+
+class LocalModelConfigurationError(ValueError):
+    """Raised when local-model configuration is unusable or unsafe."""
+
+
+class LocalModelDiscoveryError(RuntimeError):
+    """Raised for an unavailable/malformed configured local-model endpoint."""
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    """Do not let a configured local endpoint redirect discovery elsewhere."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
+
+
+def validate_local_model_name(value: str | None, *, default: str | None = None) -> str:
+    """Return a safe local model identifier without contacting any endpoint."""
+    candidate = str(value or default or os.environ.get("LOCAL_LLM_MODEL") or "llama3.1").strip()
+    if not candidate:
+        raise LocalModelConfigurationError("A local model name is required.")
+    if len(candidate) > LOCAL_MODEL_NAME_MAX_LENGTH or not LOCAL_MODEL_NAME_RE.fullmatch(candidate):
+        raise LocalModelConfigurationError(
+            "Local model names must be 1-256 characters and contain only letters, numbers, '.', '_', ':', '/', '@', '+', or '-'."
+        )
+    return candidate
+
+
+def _configured_local_llm_base_url() -> str:
+    """Validate only the server-owned local endpoint configuration.
+
+    No request-supplied URL is accepted.  Discovery also rejects embedded
+    credentials and redirects, preventing the response from exposing a
+    configured secret or following an unexpected endpoint hop.
+    """
+    raw = (os.environ.get("LOCAL_LLM_BASE_URL") or "").strip()
+    if not raw:
+        raise LocalModelConfigurationError("LOCAL_LLM_BASE_URL is not configured.")
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise LocalModelConfigurationError("LOCAL_LLM_BASE_URL must be an absolute http(s) URL.")
+    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        raise LocalModelConfigurationError(
+            "LOCAL_LLM_BASE_URL must not contain credentials, a query string, or a fragment."
+        )
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def _openai_models_url(base_url: str) -> str:
+    parsed = urlsplit(base_url)
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/v1"):
+        path = f"{path}/v1" if path else "/v1"
+    return urlunsplit((parsed.scheme, parsed.netloc, f"{path}/models", "", ""))
+
+
+def _ollama_models_url(base_url: str) -> str:
+    parsed = urlsplit(base_url)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3]
+    return urlunsplit((parsed.scheme, parsed.netloc, f"{path}/api/tags" if path else "/api/tags", "", ""))
+
+
+def _fetch_local_json(url: str) -> Mapping[str, Any]:
+    """Fetch one bounded JSON response from the configured local endpoint."""
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "MITRE-CSDH-local-model-discovery/1",
+    }
+    # Some OpenAI-compatible local servers protect /v1/models with the same
+    # token used for inference.  It is configuration-owned (never request
+    # supplied), sent only to the already-validated configured endpoint, and
+    # deliberately never included in a response, exception, or log message.
+    local_api_key = (os.environ.get("LOCAL_LLM_API_KEY") or "").strip()
+    if local_api_key:
+        headers["Authorization"] = f"Bearer {local_api_key}"
+    request = Request(url, headers=headers)
+    opener = build_opener(_NoRedirect())
+    try:
+        with opener.open(request, timeout=LOCAL_MODEL_DISCOVERY_TIMEOUT_SECONDS) as response:
+            raw = response.read(LOCAL_MODEL_DISCOVERY_MAX_RESPONSE_BYTES + 1)
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        raise LocalModelDiscoveryError("The configured local model endpoint is unavailable.") from exc
+    if len(raw) > LOCAL_MODEL_DISCOVERY_MAX_RESPONSE_BYTES:
+        raise LocalModelDiscoveryError("The configured local model endpoint returned an oversized response.")
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LocalModelDiscoveryError("The configured local model endpoint did not return JSON.") from exc
+    if not isinstance(decoded, Mapping):
+        raise LocalModelDiscoveryError("The configured local model endpoint returned an invalid model payload.")
+    return decoded
+
+
+def _model_names(items: Any, field: str) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    names: list[str] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        candidate = item.get(field)
+        if not isinstance(candidate, str):
+            continue
+        try:
+            name = validate_local_model_name(candidate)
+        except LocalModelConfigurationError:
+            continue
+        if name not in names:
+            names.append(name)
+        if len(names) >= 200:
+            break
+    return names
+
+
+def discover_local_models() -> dict[str, Any]:
+    """Discover local model IDs from only ``LOCAL_LLM_BASE_URL``.
+
+    OpenAI-compatible ``/v1/models`` is preferred.  When it is unavailable
+    (notably a native Ollama server), discovery performs the bounded
+    ``/api/tags`` fallback against the same configured origin.  No keys or
+    configured endpoint URL are returned to callers.
+    """
+    configured_default: str | None = None
+    raw_default = (os.environ.get("LOCAL_LLM_MODEL") or "").strip()
+    if raw_default:
+        try:
+            configured_default = validate_local_model_name(raw_default)
+        except LocalModelConfigurationError:
+            # The API stays usable for discovery even if an operator has a
+            # stale default; submission will return a precise configuration
+            # error when it tries to resolve that value.
+            configured_default = None
+    try:
+        base_url = _configured_local_llm_base_url()
+    except LocalModelConfigurationError as exc:
+        return {
+            "provider": "local",
+            "configured": False,
+            "models": [configured_default] if configured_default else [],
+            "default_model": configured_default,
+            "source": None,
+            "error": str(exc),
+        }
+
+    errors: list[str] = []
+    try:
+        payload = _fetch_local_json(_openai_models_url(base_url))
+        if "data" in payload and isinstance(payload.get("data"), list):
+            models = _model_names(payload.get("data"), "id")
+            if configured_default and configured_default not in models:
+                models.append(configured_default)
+            return {
+                "provider": "local",
+                "configured": True,
+                "models": models,
+                "default_model": configured_default,
+                "source": "openai_compatible",
+                "error": None,
+            }
+        errors.append("OpenAI-compatible model discovery returned no model list.")
+    except LocalModelDiscoveryError as exc:
+        errors.append(str(exc))
+
+    try:
+        payload = _fetch_local_json(_ollama_models_url(base_url))
+        if "models" in payload and isinstance(payload.get("models"), list):
+            models = _model_names(payload.get("models"), "name")
+            if configured_default and configured_default not in models:
+                models.append(configured_default)
+            return {
+                "provider": "local",
+                "configured": True,
+                "models": models,
+                "default_model": configured_default,
+                "source": "ollama",
+                "error": None,
+            }
+        errors.append("Ollama model discovery returned no model list.")
+    except LocalModelDiscoveryError as exc:
+        errors.append(str(exc))
+
+    return {
+        "provider": "local",
+        "configured": True,
+        "models": [configured_default] if configured_default else [],
+        "default_model": configured_default,
+        "source": None,
+        "error": "Local model discovery was unavailable. " + " ".join(dict.fromkeys(errors)),
+    }
 
 
 def _first_value(row: Mapping[str, Any], names: Iterable[str]) -> str | None:
@@ -405,6 +605,7 @@ def invoke_pipeline(
     provider_name: str | None,
     progress_cb: Callable[[Any], None],
     cancel_cb: Callable[[], bool],
+    model_name: str | None = None,
     report_id_factory: Callable[[str, int], str] | None = None,
     run_id: str | None = None,
     runner: Callable[..., Any] | None = None,
@@ -426,6 +627,8 @@ def invoke_pipeline(
         parameters = {}
     if "cancel_cb" in parameters:
         kwargs["cancel_cb"] = cancel_cb
+    if "model_name" in parameters and model_name is not None:
+        kwargs["model_name"] = model_name
     if "report_id_factory" in parameters and report_id_factory is not None:
         kwargs["report_id_factory"] = report_id_factory
     if "run_id" in parameters and run_id is not None:

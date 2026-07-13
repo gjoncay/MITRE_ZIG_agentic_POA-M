@@ -59,6 +59,37 @@ def _runner(_engine, _input_csv, output_dir, provider_name=None, progress_cb=Non
     return [payload]
 
 
+def _multi_pending_runner(_engine, _input_csv, output_dir, provider_name=None, progress_cb=None, cancel_cb=None):
+    """Produce two independently reviewable reports for bulk-review tests."""
+    output = Path(output_dir)
+    payloads = []
+    for technique_id, technique_name in (
+        ("T1003", "OS Credential Dumping"),
+        ("T1059", "Command and Scripting Interpreter"),
+    ):
+        display_id = f"CONSOL-{technique_id}"
+        payload = {
+            "report_id": display_id,
+            "technique_id": technique_id,
+            "technique_name": technique_name,
+            "finding_count": 1,
+            "severity_breakdown": {"High": 1},
+            "qa_verdict": "FLAG",
+            "observations": [
+                {
+                    "source_locator": {"sheet": "text_chunk", "row": technique_id},
+                    "resolution_method": "explicit_attack_id",
+                    "resolution_score": 1.0,
+                }
+            ],
+            "framework_mappings": {"graph_snapshot_id": "sha256:test", "paths": []},
+        }
+        (output / f"{display_id}.md").write_text(f"# {technique_name}\n", encoding="utf-8")
+        (output / f"{display_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+        payloads.append(payload)
+    return payloads
+
+
 def _passing_runner(_engine, _input_csv, output_dir, provider_name=None, progress_cb=None, cancel_cb=None):
     output = Path(output_dir)
     payload = {
@@ -162,9 +193,14 @@ class _RerenderEngine:
         }
 
 
-async def _wait_for_terminal(client: httpx.AsyncClient, run_id: str) -> dict:
+async def _wait_for_terminal(
+    client: httpx.AsyncClient,
+    run_id: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> dict:
     for _ in range(100):
-        payload = (await client.get(f"/api/runs/{run_id}")).json()
+        payload = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
         if payload["status"] not in {"queued", "running", "analysis_finished"}:
             return payload
         await asyncio.sleep(0.02)
@@ -317,7 +353,7 @@ def test_renderer_refresh_appends_immutable_revision_without_provider_calls(tmp_
     asyncio.run(scenario())
 
 
-def test_review_note_and_cloud_default_consent_are_enforced(tmp_path: Path) -> None:
+def test_review_note_and_local_only_default_are_enforced(tmp_path: Path) -> None:
     async def scenario() -> None:
         settings = _settings(tmp_path)
         app = create_app(settings, engine_factory=lambda: object(), pipeline_runner=_runner)
@@ -326,13 +362,13 @@ def test_review_note_and_cloud_default_consent_are_enforced(tmp_path: Path) -> N
         try:
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-                    rejected = await client.post("/api/runs", data={"text": "T1003 observed."})
-                    assert rejected.status_code == 400
-                    assert rejected.json()["error"]["code"] == "cloud_egress_acknowledgement_required"
-
-                    # Explicit local selection avoids cloud egress and permits
-                    # this deterministic fake-pipeline test to proceed.
-                    created = await client.post("/api/runs", data={"text": "T1003 observed.", "provider": "local"})
+                    # A stale process-level cloud setting cannot influence the
+                    # web API. Omitted provider selection resolves to local;
+                    # no cloud acknowledgement can make a hosted provider
+                    # available again.
+                    created = await client.post("/api/runs", data={"text": "T1003 observed."})
+                    assert created.status_code == 202
+                    assert created.json()["requested_provider"] == "local"
                     run_id = created.json()["id"]
                     await _wait_for_terminal(client, run_id)
                     report = (await client.get("/api/reports")).json()[0]
@@ -347,6 +383,190 @@ def test_review_note_and_cloud_default_consent_are_enforced(tmp_path: Path) -> N
                 os.environ.pop("LLM_PROVIDER", None)
             else:
                 os.environ["LLM_PROVIDER"] = original_provider
+
+    asyncio.run(scenario())
+
+
+def test_run_scoped_bulk_approval_records_current_revision_decisions_and_completes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        settings = _settings(tmp_path)
+        app = create_app(settings, engine_factory=lambda: object(), pipeline_runner=_multi_pending_runner)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                created = await client.post("/api/runs", data={"text": "T1003 and T1059 observed.", "provider": "local"})
+                assert created.status_code == 202
+                run_id = created.json()["id"]
+                initial_run = await _wait_for_terminal(client, run_id)
+                assert initial_run["status"] == "awaiting_review"
+                initial_reports = (await client.get("/api/reports", params={"run_id": run_id})).json()
+                # Input normalization may also materialize an UNMAPPED triage
+                # report. The endpoint must approve every current actionable
+                # report in the run, rather than only the two synthetic
+                # pipeline outputs from this test runner.
+                assert len(initial_reports) >= 2
+                assert initial_run["counters"]["reports_review_pending"] == len(initial_reports)
+                original = {
+                    item["report_id"]: {
+                        "version": item["version"],
+                        "revision_id": item["current_revision_id"],
+                    }
+                    for item in initial_reports
+                }
+
+                approved = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    headers={"If-Match": str(initial_run["version"])},
+                    json={"reason": "Validated retained evidence and approved the complete review queue."},
+                )
+                assert approved.status_code == 200, approved.text
+                payload = approved.json()
+                assert payload["approved_count"] == len(initial_reports)
+                assert payload["run"]["status"] == "completed"
+                assert payload["run"]["counters"]["reports_review_pending"] == 0
+                assert payload["event"]["type"] == "run_review_pending_bulk_approved"
+                assert payload["event"]["review"]["reason"] == "Validated retained evidence and approved the complete review queue."
+                assert {item["report_id"] for item in payload["reports"]} == set(original)
+
+                for report_id, before in original.items():
+                    detail = (await client.get(f"/api/reports/{report_id}")).json()
+                    assert detail["lifecycle_state"] == "approved"
+                    assert detail["version"] == before["version"] + 1
+                    assert detail["current_revision"]["id"] == before["revision_id"]
+                    assert [revision["id"] for revision in detail["revisions"]] == [before["revision_id"]]
+                    assert len(detail["reviews"]) == 1
+                    decision = detail["reviews"][0]
+                    assert decision["report_revision_id"] == before["revision_id"]
+                    assert decision["decision"] == "approve"
+                    assert decision["actor_id"] == "development-local"
+                    assert decision["reason"] == "Validated retained evidence and approved the complete review queue."
+
+                # A stale UI cannot silently turn an already-complete run into
+                # a successful no-op; no extra audit row or event is created.
+                no_pending = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    json={"reason": "Repeated click", "version": payload["run"]["version"]},
+                )
+                assert no_pending.status_code == 409
+                assert no_pending.json()["error"]["code"] == "no_review_pending_reports"
+                assert len(app.state.repository.list_events(run_id)) >= 1
+
+    asyncio.run(scenario())
+
+
+def test_bulk_approval_requires_fresh_version_and_nonblank_shared_reason(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        settings = _settings(tmp_path)
+        app = create_app(settings, engine_factory=lambda: object(), pipeline_runner=_multi_pending_runner)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                created = await client.post("/api/runs", data={"text": "T1003 and T1059 observed.", "provider": "local"})
+                run_id = created.json()["id"]
+                run = await _wait_for_terminal(client, run_id)
+                reports = (await client.get("/api/reports", params={"run_id": run_id})).json()
+                initial_versions = {report["report_id"]: report["version"] for report in reports}
+                initial_states = {report["report_id"]: report["lifecycle_state"] for report in reports}
+                initial_events = len(app.state.repository.list_events(run_id))
+
+                missing_version = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    json={"reason": "Needs a version precondition."},
+                )
+                assert missing_version.status_code == 428
+                assert missing_version.json()["error"]["code"] == "precondition_required"
+
+                blank_reason = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    json={"reason": "   ", "version": run["version"]},
+                )
+                assert blank_reason.status_code == 422
+                assert blank_reason.json()["error"]["code"] == "bulk_review_reason_required"
+
+                stale = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    json={"reason": "Stale click", "version": run["version"] - 1},
+                )
+                assert stale.status_code == 409
+                assert stale.json()["error"]["code"] == "conflict"
+
+                disagreeing_preconditions = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    headers={"If-Match": str(run["version"] + 1)},
+                    json={"reason": "Disagreeing preconditions", "version": run["version"]},
+                )
+                assert disagreeing_preconditions.status_code == 400
+                assert disagreeing_preconditions.json()["error"]["code"] == "version_mismatch"
+
+                # The request model intentionally does not accept a caller
+                # supplied identity for this server-attributed bulk action.
+                spoofed_actor = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    json={"reason": "Spoof", "version": run["version"], "actor": "not-an-audit-identity"},
+                )
+                assert spoofed_actor.status_code == 422
+                assert spoofed_actor.json()["error"]["code"] == "validation_error"
+
+                unchanged = (await client.get("/api/reports", params={"run_id": run_id})).json()
+                assert {report["report_id"]: report["version"] for report in unchanged} == initial_versions
+                assert {report["report_id"]: report["lifecycle_state"] for report in unchanged} == initial_states
+                assert all(not app.state.repository.report_reviews(report["report_id"]) for report in unchanged)
+                assert len(app.state.repository.list_events(run_id)) == initial_events
+
+    asyncio.run(scenario())
+
+
+def test_bulk_approval_uses_authenticated_actor_and_review_permission(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        admin_token = "bulk-admin-token-is-long-enough"
+        reviewer_token = "bulk-reviewer-token-long-enough"
+        viewer_token = "bulk-viewer-token-is-long-enough"
+        settings = replace(
+            _settings(tmp_path),
+            auth_mode="token",
+            auth_token_principals=parse_token_map(
+                json.dumps(
+                    {
+                        admin_token: {"actor": "submitter@example", "roles": ["admin"]},
+                        reviewer_token: {"actor": "reviewer@example", "roles": ["reviewer"]},
+                        viewer_token: {"actor": "viewer@example", "roles": ["viewer"]},
+                    }
+                )
+            ),
+        )
+        app = create_app(settings, engine_factory=lambda: object(), pipeline_runner=_multi_pending_runner)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://test") as client:
+                admin_headers = {"Authorization": f"Bearer {admin_token}"}
+                created = await client.post(
+                    "/api/runs",
+                    headers=admin_headers,
+                    data={"text": "T1003 and T1059 observed.", "provider": "local"},
+                )
+                run_id = created.json()["id"]
+                run = await _wait_for_terminal(client, run_id, headers=admin_headers)
+
+                anonymous = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    json={"reason": "Anonymous cannot approve", "version": run["version"]},
+                )
+                assert anonymous.status_code == 401
+
+                viewer = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    headers={"Authorization": f"Bearer {viewer_token}"},
+                    json={"reason": "Viewer cannot approve", "version": run["version"]},
+                )
+                assert viewer.status_code == 403
+
+                approved = await client.post(
+                    f"/api/runs/{run_id}/review-pending/approve",
+                    headers={"Authorization": f"Bearer {reviewer_token}"},
+                    json={"reason": "Reviewer accepted all current reports.", "version": run["version"]},
+                )
+                assert approved.status_code == 200
+                for report in approved.json()["reports"]:
+                    reviews = app.state.repository.report_reviews(report["report_id"])
+                    assert len(reviews) == 1
+                    assert reviews[0]["actor_id"] == "reviewer@example"
 
     asyncio.run(scenario())
 
@@ -452,7 +672,7 @@ def test_unresolved_observations_become_an_actionable_triage_report(tmp_path: Pa
         app = create_app(settings, engine_factory=lambda: object(), pipeline_runner=no_match_runner)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-                created = await client.post("/api/runs", data={"text": "Ambiguous behavior with no ATT&CK ID.", "provider": "none"})
+                created = await client.post("/api/runs", data={"text": "Ambiguous behavior with no ATT&CK ID.", "provider": "local"})
                 run = await _wait_for_terminal(client, created.json()["id"])
                 assert run["status"] == "awaiting_review"
                 assert run["counters"]["observations_unresolved"] == 1
@@ -546,38 +766,39 @@ def test_awaiting_review_run_cannot_receive_stale_cancellation(tmp_path: Path) -
     asyncio.run(scenario())
 
 
-def test_cloud_retry_requires_fresh_acknowledgement_and_freezes_provider(tmp_path: Path) -> None:
+def test_retry_remains_local_when_legacy_cloud_environment_is_set(tmp_path: Path) -> None:
     async def scenario() -> None:
         settings = _settings(tmp_path)
         app = create_app(settings, engine_factory=lambda: object(), pipeline_runner=_runner)
         original_provider = os.environ.get("LLM_PROVIDER")
+        original_model = os.environ.get("LOCAL_LLM_MODEL")
         os.environ["LLM_PROVIDER"] = "openai"
+        os.environ["LOCAL_LLM_MODEL"] = "configured-local:8b"
         try:
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
                     created = await client.post(
                         "/api/runs",
-                        data={"text": "T1003 observed through cloud default.", "cloud_acknowledged": "true"},
+                        data={"text": "T1003 observed through a legacy cloud default."},
                     )
                     assert created.status_code == 202
                     source_run = await _wait_for_terminal(client, created.json()["id"])
-                    assert source_run["retry_provider"] == "openai"
-                    assert source_run["retry_requires_cloud_acknowledgement"] is True
-
-                    missing_ack = await client.post(f"/api/runs/{source_run['id']}/retry")
-                    assert missing_ack.status_code == 400
-                    assert missing_ack.json()["error"]["code"] == "cloud_egress_acknowledgement_required"
+                    assert source_run["requested_provider"] == "local"
+                    assert source_run["requested_model"] == "configured-local:8b"
+                    assert source_run["retry_provider"] == "local"
+                    assert source_run["retry_requires_cloud_acknowledgement"] is False
 
                     retried = await client.post(
                         f"/api/runs/{source_run['id']}/retry",
-                        json={"cloud_acknowledged": True},
+                        json={"model": "retry-local:latest", "cloud_acknowledged": True},
                     )
                     assert retried.status_code == 202
                     retry = retried.json()
-                    assert retry["requested_provider"] == "openai"
+                    assert retry["requested_provider"] == "local"
+                    assert retry["requested_model"] == "retry-local:latest"
                     retry_artifact = app.state.repository.list_artifacts(retry["id"])[0]
-                    assert retry_artifact["metadata"]["effective_requested_provider"] == "openai"
-                    assert retry_artifact["metadata"]["cloud_egress_acknowledged"] is True
+                    assert retry_artifact["metadata"]["effective_requested_provider"] == "local"
+                    assert retry_artifact["metadata"]["requested_model"] == "retry-local:latest"
                     # Do not close the application while a newly scheduled
                     # retry still owns its run workspace/database connection.
                     # This also verifies the retry settles under the durable
@@ -589,6 +810,10 @@ def test_cloud_retry_requires_fresh_acknowledgement_and_freezes_provider(tmp_pat
                 os.environ.pop("LLM_PROVIDER", None)
             else:
                 os.environ["LLM_PROVIDER"] = original_provider
+            if original_model is None:
+                os.environ.pop("LOCAL_LLM_MODEL", None)
+            else:
+                os.environ["LOCAL_LLM_MODEL"] = original_model
 
     asyncio.run(scenario())
 

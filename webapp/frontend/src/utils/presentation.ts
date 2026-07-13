@@ -33,7 +33,16 @@ export function isTerminalRun(status: string): boolean {
 }
 
 export function runNeedsReview(run: RunSnapshot): boolean {
-  return Boolean(run.review_required) || run.status === "awaiting_review" || (run.progress.reports_review_pending ?? 0) > 0 || (run.progress.reports_flagged ?? 0) > 0;
+  // `reports_flagged` is a historical count, not an actionable count. A run
+  // that began with flagged reports must become complete after every one has
+  // an accepted review decision; otherwise the bulk-review action would leave
+  // the UI permanently warning even though the durable completion gate passed.
+  if (["completed", "done"].includes(run.status)) return false;
+  if (run.status === "awaiting_review") return true;
+  if (typeof run.progress.reports_review_pending === "number") return run.progress.reports_review_pending > 0;
+  // Older deployments may not supply the explicit pending counter. Retain a
+  // narrow compatibility fallback for those snapshots only.
+  return Boolean(run.review_required) || (run.progress.reports_flagged ?? 0) > 0;
 }
 
 export function reportNeedsReview(report: ReportSummary): boolean {

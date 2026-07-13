@@ -150,6 +150,11 @@ function ApiSessionControl({ session, onSessionChange }: { session: BrowserSessi
   const [message, setMessage] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
+  // A private, explicitly no-auth deployment does not need a bearer-token
+  // control in the UI. Audit actions still retain their local actor, but no
+  // browser credential is collected or stored.
+  if (session?.authenticationMode === "disabled") return null;
+
   async function connect() {
     setConnecting(true);
     setMessage(null);

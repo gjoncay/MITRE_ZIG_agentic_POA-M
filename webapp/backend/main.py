@@ -34,18 +34,28 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import AuthPolicy, AuthenticationError, AuthorizationError, Principal, parse_token_map
-from .db import ConflictError, LifecycleRepository, NotFoundError, REVIEW_PENDING_REPORT_STATES, utc_now
+from .db import (
+    ConflictError,
+    LifecycleRepository,
+    NoReviewPendingReportsError,
+    NotFoundError,
+    REVIEW_PENDING_REPORT_STATES,
+    utc_now,
+)
 from .maintenance import reconcile_incomplete_deletion_operations
 from .pipeline_adapter import (
+    LocalModelConfigurationError,
     NormalizationError,
     RunCanceled,
+    discover_local_models,
     invoke_pipeline,
     normalize_artifact,
     rerender_report_from_durable_evidence,
     resolve_pipeline_asset,
+    validate_local_model_name,
 )
 from .validation import ALLOWED_EXTENSIONS, ArtifactValidationError, inspect_artifact, validate_text_artifact
 from .workspace import RunWorkspace, WorkspaceError
@@ -54,7 +64,8 @@ from .workspace import RunWorkspace, WorkspaceError
 logger = logging.getLogger("mitre_csdh.webapp")
 logging.basicConfig(level=logging.INFO)
 
-VALID_PROVIDERS = {"local", "openai", "gemini", "none"}
+LOCAL_ONLY_PROVIDER = "local"
+VALID_PROVIDERS = frozenset({LOCAL_ONLY_PROVIDER})
 TERMINAL_RUN_STATES = {"completed", "failed", "canceled"}
 REVIEW_STATE_ALIASES: dict[str, tuple[str, ...]] = {
     "pending": tuple(sorted(REVIEW_PENDING_REPORT_STATES)),
@@ -79,10 +90,10 @@ class BackendSettings:
     max_text_characters: int = 2_000_000
     max_workers: int = 1
     delete_retention_hours: int = 24
-    # Explicitly disabled only for local/in-process development settings. The
-    # deployed environment defaults to token authentication in
-    # ``from_environment`` so caller-supplied review actor strings are never
-    # treated as identity in production.
+    # A private single-operator Tailnet may explicitly disable application
+    # authentication. The deployed default remains token authentication, so
+    # shared deployments do not treat caller-supplied review actor strings as
+    # an authoritative identity.
     auth_mode: str = "disabled"
     auth_token_principals: Mapping[str, Principal] = field(default_factory=dict)
     auth_proxy_header: str = "X-CSDH-Authenticated-User"
@@ -161,6 +172,21 @@ class ReviewRequest(BaseModel):
     version: int | None = Field(default=None, ge=1)
 
 
+class BulkApproveReviewPendingRequest(BaseModel):
+    """One auditable reason for approving a run's current pending reports.
+
+    The caller must not supply an actor: the endpoint records only the
+    authenticated principal returned by :func:`_authorize`.  Extra fields are
+    rejected so a stale browser-side actor cannot be mistaken for an audit
+    identity by a future handler change.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=4_000)
+    version: int | None = Field(default=None, ge=1)
+
+
 class DeleteRequest(BaseModel):
     actor: str = Field(min_length=1, max_length=200)
     reason: str = Field(min_length=1, max_length=4_000)
@@ -174,8 +200,11 @@ class RestoreRequest(BaseModel):
 
 
 class RetryRequest(BaseModel):
-    """Explicit consent for replaying retained evidence through a cloud provider."""
+    """Optional local-model override for replaying retained source evidence."""
 
+    model: str | None = Field(default=None, max_length=256)
+    # Kept only so an older browser client can submit its prior payload. It is
+    # ignored: cloud providers are not available through this backend.
     cloud_acknowledged: bool = False
 
 
@@ -200,6 +229,8 @@ def _problem_from_exception(exc: Exception) -> ApiProblem:
         return ApiProblem(400, "workspace_error", str(exc))
     if isinstance(exc, NotFoundError):
         return ApiProblem(404, "not_found", str(exc))
+    if isinstance(exc, NoReviewPendingReportsError):
+        return ApiProblem(409, "no_review_pending_reports", str(exc))
     if isinstance(exc, ConflictError):
         return ApiProblem(409, "conflict", str(exc))
     return ApiProblem(500, "internal_error", "An unexpected backend error occurred.")
@@ -214,11 +245,10 @@ def _authorize(
 ) -> str:
     """Require a configured principal and return the server-derived actor ID.
 
-    In explicit development mode authentication is disabled, so the legacy
-    required actor field is retained as audit metadata. In deployed token or
-    trusted-proxy modes the client cannot impersonate another reviewer: a
-    non-empty body actor must match the authenticated principal and the stored
-    decision always uses the principal identity.
+    In explicitly disabled local/Tailnet mode, the legacy required actor field
+    is retained as audit metadata. In token or trusted-proxy modes the client
+    cannot impersonate another reviewer: a non-empty body actor must match the
+    authenticated principal and the stored decision always uses that identity.
     """
     settings: BackendSettings = app.state.settings
     if settings.auth_configuration_error:
@@ -576,6 +606,7 @@ class DurableWorker:
                 input_csv=normalized.input_csv,
                 output_dir=workspace.pipeline_dir,
                 provider_name=run.get("requested_provider"),
+                model_name=run.get("requested_model"),
                 progress_cb=progress,
                 # ``invoke_pipeline`` treats a true predicate as a user
                 # cancellation, so reserve it for the persisted user action.
@@ -632,7 +663,12 @@ class DurableWorker:
                     provider_record.get("effective_provider")
                     or result.get("effective_provider")
                     or run.get("requested_provider")
-                    or os.environ.get("LLM_PROVIDER", "none")
+                    or LOCAL_ONLY_PROVIDER
+                )
+                effective_model = (
+                    provider_record.get("model")
+                    if "model" in provider_record
+                    else run.get("requested_model")
                 )
                 state = _report_state(result, effective_provider, report_data)
                 self.repository.create_report_with_revision(
@@ -660,8 +696,8 @@ class DurableWorker:
                 )
                 self.repository.update_run(
                     run_id,
-                    effective_provider=provider_record.get("effective_provider"),
-                    effective_model=provider_record.get("model"),
+                    effective_provider=effective_provider,
+                    effective_model=effective_model,
                     degraded_reason=provider_record.get("degraded_reason"),
                 )
                 self.repository.append_event(
@@ -863,7 +899,7 @@ def _expected_version(request: Request, supplied: int | None, *, resource: str) 
     try:
         from_header = int(raw)
     except ValueError as exc:
-        raise ApiProblem(400, "invalid_if_match", "If-Match must be an integer report version.") from exc
+        raise ApiProblem(400, "invalid_if_match", f"If-Match must be an integer {resource} version.") from exc
     if supplied is not None and supplied != from_header:
         raise ApiProblem(400, "version_mismatch", "JSON version and If-Match header disagree.")
     return from_header
@@ -876,6 +912,38 @@ def _required_note(body: ReviewRequest) -> str:
     return note
 
 
+def _required_bulk_approval_reason(body: BulkApproveReviewPendingRequest) -> str:
+    reason = body.reason.strip()
+    if not reason:
+        raise ApiProblem(
+            422,
+            "bulk_review_reason_required",
+            "A non-empty shared approval reason is required for the audit trail.",
+        )
+    return reason
+
+
+def _resolve_local_model(model: str | None) -> str:
+    """Resolve and validate the per-run model without changing process env."""
+    try:
+        return validate_local_model_name(model)
+    except LocalModelConfigurationError as exc:
+        raise ApiProblem(422, "invalid_local_model", str(exc)) from exc
+
+
+def _require_local_provider(provider: str | None) -> str:
+    """Reject all cloud/no-provider submission modes at the API boundary."""
+    candidate = (provider or LOCAL_ONLY_PROVIDER).strip().lower()
+    if candidate != LOCAL_ONLY_PROVIDER:
+        raise ApiProblem(
+            400,
+            "provider_not_allowed",
+            "Only the local LLM provider is available in this deployment.",
+            {"allowed": [LOCAL_ONLY_PROVIDER]},
+        )
+    return LOCAL_ONLY_PROVIDER
+
+
 async def _submit_run(
     app: FastAPI,
     *,
@@ -883,6 +951,7 @@ async def _submit_run(
     file: UploadFile | None,
     text: str | None,
     provider: str | None,
+    model: str | None,
     cloud_acknowledged: str | bool | None = None,
 ) -> dict[str, Any]:
     settings: BackendSettings = app.state.settings
@@ -893,19 +962,8 @@ async def _submit_run(
     engine = _require_engine(app)
     if file is not None and text and text.strip():
         raise ApiProblem(400, "multiple_artifacts", "Submit either one file or pasted text, not both.")
-    if provider not in (None, "") and provider not in VALID_PROVIDERS:
-        raise ApiProblem(400, "invalid_provider", f"Invalid provider '{provider}'.", {"allowed": sorted(VALID_PROVIDERS)})
-    provider_name = provider or None
-    # A blank provider selects the server default.  Consent must cover that
-    # effective choice as well, otherwise a deployment with LLM_PROVIDER=openai
-    # could silently egress evidence submitted through the default UI option.
-    effective_requested_provider = (provider_name or os.environ.get("LLM_PROVIDER", "none")).strip().lower()
-    if effective_requested_provider in {"openai", "gemini"} and not _affirmative(cloud_acknowledged):
-        raise ApiProblem(
-            400,
-            "cloud_egress_acknowledgement_required",
-            "Acknowledge that artifact evidence will be sent to the selected cloud LLM provider.",
-        )
+    effective_requested_provider = _require_local_provider(provider)
+    requested_model = _resolve_local_model(model)
     if file is None:
         text = validate_text_artifact(text, max_characters=settings.max_text_characters)
     else:
@@ -918,10 +976,11 @@ async def _submit_run(
     repository.create_run(
         run_id=run_id,
         workspace_path=str(workspace.path),
-        # Snapshot the effective choice at submission. A blank UI selection
-        # must not silently change behavior/egress if LLM_PROVIDER changes
-        # before a queued or recovered run is executed.
+        # Snapshot the local provider/model at submission. The worker receives
+        # this model explicitly; a later environment change cannot alter a
+        # queued run or redirect evidence to a cloud provider.
         requested_provider=effective_requested_provider,
+        requested_model=requested_model,
         graph_snapshot_id=getattr(engine, "graph_snapshot_id", None),
     )
     try:
@@ -946,12 +1005,22 @@ async def _submit_run(
             kind=inspection.kind,
             metadata={
                 **inspection.metadata,
-                "cloud_egress_acknowledged": _affirmative(cloud_acknowledged),
                 "effective_requested_provider": effective_requested_provider,
+                "requested_model": requested_model,
                 "submitted_by": submitted_by,
             },
         )
-        repository.append_event(run_id, "run_queued", {"phase": "queued", "message": "Artifact accepted", "current": {"artifact_id": artifact_id, "submitted_by": submitted_by}, "counters": {"artifacts_total": 1}})
+        repository.append_event(
+            run_id,
+            "run_queued",
+            {
+                "phase": "queued",
+                "message": "Artifact accepted for local analysis",
+                "current": {"artifact_id": artifact_id, "submitted_by": submitted_by},
+                "counters": {"artifacts_total": 1},
+                "provider": {"requested_provider": effective_requested_provider, "requested_model": requested_model},
+            },
+        )
         app.state.worker.schedule(run_id)
         return repository.get_run_snapshot(run_id) or {"id": run_id, "status": "queued"}
     except Exception as exc:
@@ -1025,10 +1094,11 @@ def create_app(
         file: UploadFile | None = File(None),
         text: str | None = Form(None),
         provider: str | None = Form(None),
+        model: str | None = Form(None),
         cloud_acknowledged: str | None = Form(None),
     ):
         actor = _authorize(app, request, "submit")
-        return _snapshot_response(await _submit_run(app, submitted_by=actor, file=file, text=text, provider=provider, cloud_acknowledged=cloud_acknowledged))
+        return _snapshot_response(await _submit_run(app, submitted_by=actor, file=file, text=text, provider=provider, model=model, cloud_acknowledged=cloud_acknowledged))
 
     @app.post("/api/analyze", status_code=202)
     async def analyze_legacy(
@@ -1036,10 +1106,11 @@ def create_app(
         file: UploadFile | None = File(None),
         text: str | None = Form(None),
         provider: str | None = Form(None),
+        model: str | None = Form(None),
         cloud_acknowledged: str | None = Form(None),
     ):
         actor = _authorize(app, request, "submit")
-        snapshot = await _submit_run(app, submitted_by=actor, file=file, text=text, provider=provider, cloud_acknowledged=cloud_acknowledged)
+        snapshot = await _submit_run(app, submitted_by=actor, file=file, text=text, provider=provider, model=model, cloud_acknowledged=cloud_acknowledged)
         return {"job_id": snapshot["id"]}
 
     @app.get("/api/runs")
@@ -1058,19 +1129,30 @@ def create_app(
 
     @app.get("/api/config")
     async def public_config():
-        """Expose only submission policy needed for a safe provider choice.
-
-        No keys, URLs, or deployment details are returned.  The frontend can
-        require an explicit acknowledgement when a server default is cloud.
-        """
-        default_provider = (os.environ.get("LLM_PROVIDER", "none") or "none").strip().lower()
+        """Expose the fixed local-only submission policy without secrets."""
         return {
-            "default_provider": default_provider,
+            "default_provider": LOCAL_ONLY_PROVIDER,
             "allowed_providers": sorted(VALID_PROVIDERS),
-            "cloud_acknowledgement_required": default_provider in {"openai", "gemini"},
+            "cloud_acknowledgement_required": False,
             "authentication_mode": settings.auth_mode,
             "authentication_ready": app.state.auth_policy.is_ready and not bool(settings.auth_configuration_error),
         }
+
+    @app.get("/api/local-models")
+    async def local_models(request: Request):
+        """List model IDs from the configured local endpoint only.
+
+        The route intentionally accepts no URL/query override. Discovery runs
+        in a worker thread with a short bounded timeout and never returns the
+        configured base URL or local API key.
+        """
+        _authorize(app, request, "view")
+        # The probe may wait for its short network timeout. Keep it off the
+        # event loop, but own and join this single-use executor before the
+        # response is sent so a request cannot leave background discovery work
+        # running during application shutdown.
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="csdh-model-discovery") as executor:
+            return await asyncio.get_running_loop().run_in_executor(executor, discover_local_models)
 
     @app.post("/api/session")
     async def establish_browser_session(request: Request):
@@ -1137,10 +1219,53 @@ def create_app(
         except Exception as exc:
             raise _problem_from_exception(exc)
 
+    @app.post("/api/runs/{run_id}/review-pending/approve")
+    async def bulk_approve_review_pending_reports(
+        run_id: str,
+        body: BulkApproveReviewPendingRequest,
+        request: Request,
+    ):
+        """Approve the run's current actionable review-pending reports.
+
+        The repository performs the whole batch under one SQLite write
+        transaction.  Each report receives its own review decision attached to
+        its current revision; this endpoint is not a shortcut that replaces
+        per-report audit history with a single run-level record.
+        """
+        try:
+            actor = _authorize(app, request, "review")
+            result = repository.bulk_approve_review_pending_reports(
+                run_id=run_id,
+                expected_run_version=_expected_version(request, body.version, resource="run"),
+                actor_id=actor,
+                reason=_required_bulk_approval_reason(body),
+            )
+            reports = [
+                {
+                    "id": report["id"],
+                    "report_id": report["id"],
+                    "display_id": report["display_id"],
+                    "lifecycle_state": report["lifecycle_state"],
+                    "version": report["version"],
+                    "current_revision_id": report["current_revision_id"],
+                }
+                for report in result["reports"]
+            ]
+            run = repository.get_run_snapshot(run_id) or result["run"]
+            return {
+                "run": _snapshot_response(run),
+                "approved_count": len(reports),
+                "reports": reports,
+                "event": result["event"],
+            }
+        except Exception as exc:
+            raise _problem_from_exception(exc)
+
     async def retry_run_from_source(
         run_id: str,
         *,
         actor: str,
+        model: str | None = None,
         cloud_acknowledged: bool = False,
     ) -> dict[str, Any]:
         engine = _require_engine(app)
@@ -1152,25 +1277,16 @@ def create_app(
             raise ApiProblem(409, "retry_not_supported", "Retry currently requires a run with exactly one artifact.")
         source_artifact = artifacts[0]
         source_metadata = source_artifact.get("metadata") if isinstance(source_artifact.get("metadata"), Mapping) else {}
-        effective_retry_provider = str(
-            source_metadata.get("effective_requested_provider")
-            or source_run.get("requested_provider")
-            or source_run.get("effective_provider")
-            or os.environ.get("LLM_PROVIDER", "none")
-        ).strip().lower()
-        if effective_retry_provider not in VALID_PROVIDERS:
-            raise ApiProblem(
-                409,
-                "retry_provider_invalid",
-                f"The retained source run has unsupported provider '{effective_retry_provider}'. Start a new analysis instead.",
-            )
-        if effective_retry_provider in {"openai", "gemini"} and not _affirmative(cloud_acknowledged):
-            raise ApiProblem(
-                400,
-                "cloud_egress_acknowledgement_required",
-                "A retry is a new cloud-evidence submission. Acknowledge that retained artifact evidence will be sent to the selected cloud LLM provider.",
-                {"provider": effective_retry_provider, "retry": True},
-            )
+        # Retries are also local-only. Historical runs may record a cloud
+        # provider, but their retained source evidence is never replayed to
+        # that provider; it is reprocessed with the selected/configured local
+        # model instead.
+        effective_retry_provider = LOCAL_ONLY_PROVIDER
+        inherited_model = (
+            source_metadata.get("requested_model")
+            or source_run.get("requested_model")
+        )
+        effective_retry_model = _resolve_local_model(model if model is not None else inherited_model)
         retry_id = str(uuid.uuid4())
         source_workspace = RunWorkspace.open(settings.runs_dir, run_id)
         source = source_workspace.resolve_relative(source_artifact["storage_key"])
@@ -1191,19 +1307,17 @@ def create_app(
             repository.create_run(
                 run_id=retry_id,
                 workspace_path=str(retry_workspace.path),
-                # Freeze the originally effective provider rather than consulting a
-                # changed server default during replay. Consent above is therefore
-                # tied to the exact provider that will receive retained evidence.
                 requested_provider=effective_retry_provider,
+                requested_model=effective_retry_model,
                 graph_snapshot_id=getattr(engine, "graph_snapshot_id", None) or source_run.get("graph_snapshot_id"),
                 retry_of_run_id=run_id,
             )
             retry_row_created = True
             target = retry_workspace.atomic_copy(source, retry_workspace.uploads_dir / source.name)
             copied = repository.create_artifact(
-                artifact_id=str(uuid.uuid4()), run_id=retry_id, original_name=source_artifact["original_name"], media_type=source_artifact.get("media_type"), extension=source_artifact.get("extension"), sha256=source_artifact["sha256"], storage_key=retry_workspace.relative(target), byte_size=source_artifact["byte_size"], kind=source_artifact["kind"], metadata={**source_metadata, "retried_from_artifact_id": source_artifact["id"], "retried_by": actor, "effective_requested_provider": effective_retry_provider, "cloud_egress_acknowledged": _affirmative(cloud_acknowledged)},
+                artifact_id=str(uuid.uuid4()), run_id=retry_id, original_name=source_artifact["original_name"], media_type=source_artifact.get("media_type"), extension=source_artifact.get("extension"), sha256=source_artifact["sha256"], storage_key=retry_workspace.relative(target), byte_size=source_artifact["byte_size"], kind=source_artifact["kind"], metadata={**source_metadata, "retried_from_artifact_id": source_artifact["id"], "retried_by": actor, "effective_requested_provider": effective_retry_provider, "requested_model": effective_retry_model},
             )
-            repository.append_event(retry_id, "run_queued", {"phase": "queued", "message": f"Retry of {run_id}", "current": {"artifact_id": copied["id"], "retried_by": actor}, "counters": {"artifacts_total": 1}, "provider": {"effective_requested_provider": effective_retry_provider, "cloud_egress_acknowledged": _affirmative(cloud_acknowledged)}})
+            repository.append_event(retry_id, "run_queued", {"phase": "queued", "message": f"Local-model retry of {run_id}", "current": {"artifact_id": copied["id"], "retried_by": actor}, "counters": {"artifacts_total": 1}, "provider": {"requested_provider": effective_retry_provider, "requested_model": effective_retry_model}})
             app.state.worker.schedule(retry_id)
             return _snapshot_response(repository.get_run_snapshot(retry_id) or {"id": retry_id, "status": "queued"})
         except Exception as exc:
@@ -1252,7 +1366,7 @@ def create_app(
     @app.post("/api/runs/{run_id}/retry", status_code=202)
     async def retry_run(run_id: str, request: Request, body: RetryRequest | None = None):
         actor = _authorize(app, request, "operate")
-        return await retry_run_from_source(run_id, actor=actor, cloud_acknowledged=bool(body and body.cloud_acknowledged))
+        return await retry_run_from_source(run_id, actor=actor, model=body.model if body else None, cloud_acknowledged=bool(body and body.cloud_acknowledged))
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(run_id: str, request: Request, after: int = Query(0, ge=0)):
@@ -1578,6 +1692,7 @@ def create_app(
         return await retry_run_from_source(
             report["run_id"],
             actor=actor,
+            model=body.model if body else None,
             cloud_acknowledged=bool(body and body.cloud_acknowledged),
         )
 

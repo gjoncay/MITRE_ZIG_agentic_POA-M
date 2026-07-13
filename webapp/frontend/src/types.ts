@@ -1,7 +1,10 @@
 /** Shared frontend API shapes.  The backend intentionally returns rich JSON for
  * report mappings, so report detail keeps open-ended sections as unknown values. */
 
-export type Provider = "" | "local" | "openai" | "gemini" | "none";
+/** The web application intentionally submits analysis only to an operator
+ * configured local model endpoint.  Historical reports may still display an
+ * older provider value, so provider fields elsewhere remain plain strings. */
+export type Provider = "local";
 
 export type RunStatus =
   | "queued"
@@ -70,8 +73,6 @@ export interface RunSnapshot {
   degraded_reason?: string | null;
   review_required?: boolean;
   review_gate?: string | null;
-  retry_provider?: string;
-  retry_requires_cloud_acknowledgement?: boolean;
   cancel_requested?: boolean;
   progress: ProgressMetrics;
   metrics?: ProgressMetrics;

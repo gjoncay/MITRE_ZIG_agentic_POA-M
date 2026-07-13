@@ -53,6 +53,10 @@ class ConflictError(RepositoryError):
     pass
 
 
+class NoReviewPendingReportsError(ConflictError):
+    """Raised when a bulk-review request has no actionable reports to approve."""
+
+
 # These are the report states that still require a human or system action
 # before a run can be considered complete. Keep the snapshot counter and the
 # durable completion gate on one definition so the UI never reports a green
@@ -73,6 +77,15 @@ REVIEW_PENDING_REPORT_STATES = frozenset(
         # remain visible/actionable rather than silently completing a run.
         "rejected",
     }
+)
+
+# A deletion/restore transition is deliberately review-pending so it keeps a
+# run from looking complete, but it is not safe to convert that in-flight
+# lifecycle operation into an approval.  The bulk endpoint rejects the entire
+# request when it sees one of these states instead of approving a subset and
+# leaving an ambiguous result behind.
+BULK_APPROVABLE_REVIEW_STATES = frozenset(
+    state for state in REVIEW_PENDING_REPORT_STATES if state not in {"deleting", "restoring"}
 )
 
 # Deletion is retention/lifecycle housekeeping, not a review decision. If a
@@ -129,6 +142,7 @@ class LifecycleRepository:
                     policy_version TEXT NOT NULL,
                     graph_snapshot_id TEXT,
                     requested_provider TEXT,
+                    requested_model TEXT,
                     effective_provider TEXT,
                     effective_model TEXT,
                     degraded_reason TEXT,
@@ -349,6 +363,8 @@ class LifecycleRepository:
             }
             if "generation_finished_at" not in run_columns:
                 conn.execute("ALTER TABLE analysis_runs ADD COLUMN generation_finished_at TEXT")
+            if "requested_model" not in run_columns:
+                conn.execute("ALTER TABLE analysis_runs ADD COLUMN requested_model TEXT")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -430,6 +446,7 @@ class LifecycleRepository:
         run_id: str,
         workspace_path: str,
         requested_provider: str | None,
+        requested_model: str | None = None,
         policy_version: str = "v1",
         graph_snapshot_id: str | None = None,
         retry_of_run_id: str | None = None,
@@ -441,9 +458,9 @@ class LifecycleRepository:
                 """
                 INSERT INTO analysis_runs (
                     id, status, created_at, updated_at, policy_version,
-                    graph_snapshot_id, requested_provider, workspace_path,
+                    graph_snapshot_id, requested_provider, requested_model, workspace_path,
                     retry_of_run_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -453,6 +470,7 @@ class LifecycleRepository:
                     policy_version,
                     graph_snapshot_id,
                     requested_provider,
+                    requested_model,
                     workspace_path,
                     retry_of_run_id,
                 ),
@@ -498,15 +516,15 @@ class LifecycleRepository:
         run["report_ids"] = [str(row["id"]) for row in report_ids]
         raw_artifact_metadata = json_loads(artifact_row["metadata_json"], {}) if artifact_row else {}
         artifact_metadata = raw_artifact_metadata if isinstance(raw_artifact_metadata, Mapping) else {}
-        retry_provider = str(
-            artifact_metadata.get("effective_requested_provider")
-            or run.get("requested_provider")
-            or run.get("effective_provider")
-            or ""
-        ).strip().lower()
-        if retry_provider:
-            run["retry_provider"] = retry_provider
-            run["retry_requires_cloud_acknowledgement"] = retry_provider in {"openai", "gemini"}
+        # Replay is intentionally local-only, including for historical rows
+        # that may retain an old cloud provider for provenance.  Exposing that
+        # historical value as a retry target would let a stale browser ask for
+        # a provider this deployment no longer permits.
+        run["retry_provider"] = "local"
+        run["retry_requires_cloud_acknowledgement"] = False
+        retry_model = artifact_metadata.get("requested_model") or run.get("requested_model")
+        if isinstance(retry_model, str) and retry_model.strip():
+            run["retry_model"] = retry_model.strip()
         return run
 
     def list_runs(
@@ -524,8 +542,11 @@ class LifecycleRepository:
             params.append(status)
         if search and search.strip():
             needle = f"%{search.strip()}%"
-            clauses.append("(id LIKE ? OR phase LIKE ? OR requested_provider LIKE ? OR effective_provider LIKE ?)")
-            params.extend([needle, needle, needle, needle])
+            clauses.append(
+                "(id LIKE ? OR phase LIKE ? OR requested_provider LIKE ? "
+                "OR requested_model LIKE ? OR effective_provider LIKE ? OR effective_model LIKE ?)"
+            )
+            params.extend([needle, needle, needle, needle, needle, needle])
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             total = conn.execute(f"SELECT COUNT(*) FROM analysis_runs{where}", params).fetchone()[0]
@@ -1453,6 +1474,166 @@ class LifecycleRepository:
             updated = conn.execute("SELECT * FROM reports WHERE id = ?", (report["id"],)).fetchone()
         return self._report_from_row(updated)
 
+    def bulk_approve_review_pending_reports(
+        self,
+        *,
+        run_id: str,
+        expected_run_version: int,
+        actor_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Approve every actionable review-pending report in one run.
+
+        The query, state changes, per-report review decisions, completion
+        recomputation, and summary event intentionally share one
+        ``BEGIN IMMEDIATE`` transaction.  A concurrent review, rerender, or
+        lifecycle transition therefore either happens before this operation
+        (and makes the supplied run version stale) or after the complete
+        batch; it can never leave a partially approved run.
+
+        A decision is attached to the current revision of *each* report.  The
+        bulk action does not manufacture a synthetic run-level review in place
+        of report-level audit history, and it never changes a report's current
+        revision pointer.
+        """
+        shared_reason = str(reason or "").strip()
+        if not shared_reason:
+            raise ConflictError("A non-empty shared approval reason is required.")
+        reviewer = str(actor_id or "").strip()
+        if not reviewer:
+            raise ConflictError("A server-derived reviewer identity is required.")
+
+        now = utc_now()
+        pending_states = tuple(sorted(REVIEW_PENDING_REPORT_STATES))
+        placeholders = ", ".join("?" for _ in pending_states)
+        with self.transaction() as conn:
+            run = conn.execute("SELECT * FROM analysis_runs WHERE id = ?", (run_id,)).fetchone()
+            if run is None:
+                raise NotFoundError(f"Run '{run_id}' was not found.")
+            if run["status"] in {"failed", "canceled"}:
+                raise ConflictError(
+                    f"Run '{run_id}' is {run['status']} and cannot receive a bulk review decision."
+                )
+            if int(run["version"]) != int(expected_run_version):
+                raise ConflictError(
+                    f"Run has version {run['version']}; bulk approval was submitted for stale version {expected_run_version}."
+                )
+
+            reports = conn.execute(
+                f"""
+                SELECT r.*, rr.id AS current_revision_exists
+                FROM reports r
+                LEFT JOIN report_revisions rr
+                  ON rr.id = r.current_revision_id AND rr.report_id = r.id
+                WHERE r.run_id = ? AND r.lifecycle_state IN ({placeholders})
+                ORDER BY r.created_at, r.id
+                """,
+                (run_id, *pending_states),
+            ).fetchall()
+            if not reports:
+                raise NoReviewPendingReportsError(
+                    f"Run '{run_id}' has no review-pending reports to approve."
+                )
+
+            blocked_states = sorted(
+                {str(report["lifecycle_state"]) for report in reports if report["lifecycle_state"] not in BULK_APPROVABLE_REVIEW_STATES}
+            )
+            if blocked_states:
+                raise ConflictError(
+                    "Bulk approval cannot proceed while the run contains reports in "
+                    f"an in-flight lifecycle state: {', '.join(blocked_states)}."
+                )
+            missing_revision = [str(report["id"]) for report in reports if not report["current_revision_exists"]]
+            if missing_revision:
+                raise ConflictError(
+                    "Bulk approval cannot proceed because one or more pending reports "
+                    "do not have a valid current revision."
+                )
+
+            approved_ids: list[str] = []
+            approved_rows: list[sqlite3.Row] = []
+            for report in reports:
+                changed = conn.execute(
+                    """
+                    UPDATE reports
+                    SET lifecycle_state = 'approved', updated_at = ?, version = version + 1
+                    WHERE id = ? AND lifecycle_state = ? AND current_revision_id = ?
+                    """,
+                    (
+                        now,
+                        report["id"],
+                        report["lifecycle_state"],
+                        report["current_revision_id"],
+                    ),
+                ).rowcount
+                if changed != 1:  # defensive: a future repository change must not create a partial batch
+                    raise ConflictError(
+                        f"Report '{report['id']}' changed while bulk approval was being prepared."
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO review_decisions (
+                        id, report_revision_id, actor_id, decision, reason, notes, created_at
+                    ) VALUES (?, ?, ?, 'approve', ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        report["current_revision_id"],
+                        reviewer,
+                        shared_reason,
+                        shared_reason,
+                        now,
+                    ),
+                )
+                approved_ids.append(str(report["id"]))
+                updated_report = conn.execute(
+                    "SELECT * FROM reports WHERE id = ?",
+                    (report["id"],),
+                ).fetchone()
+                if updated_report is None:  # pragma: no cover - guarded by the successful update above
+                    raise ConflictError(f"Report '{report['id']}' disappeared during bulk approval.")
+                approved_rows.append(updated_report)
+
+            updated_run = self._recompute_run_completion_locked(
+                conn,
+                run_id,
+                now=now,
+                phase="review",
+            )
+
+            seq = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM job_events WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+            event = {
+                "seq": seq,
+                "at": now,
+                "type": "run_review_pending_bulk_approved",
+                "phase": "review",
+                "message": f"Bulk-approved {len(approved_ids)} review-pending report(s).",
+                "current": {
+                    "actor": reviewer,
+                    "report_count": len(approved_ids),
+                    "report_ids": approved_ids,
+                },
+                "counters": dict(updated_run.get("counters") or {}),
+                "review": {
+                    "decision": "approve",
+                    "reason": shared_reason,
+                    "report_count": len(approved_ids),
+                },
+            }
+            conn.execute(
+                "INSERT INTO job_events (run_id, seq, created_at, event_type, payload_json) VALUES (?, ?, ?, ?, ?)",
+                (run_id, seq, now, event["type"], json_dumps(event)),
+            )
+
+        return {
+            "run": updated_run,
+            "reports": [self._report_from_row(row) for row in approved_rows],
+            "event": event,
+        }
+
     def begin_delete(
         self,
         *,
@@ -1759,49 +1940,66 @@ class LifecycleRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def _recompute_run_completion_locked(
+        self,
+        conn: sqlite3.Connection,
+        run_id: str,
+        *,
+        now: str | None = None,
+        phase: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply the completion gate within an already-open write transaction."""
+        run = conn.execute("SELECT * FROM analysis_runs WHERE id = ?", (run_id,)).fetchone()
+        if run is None:
+            raise NotFoundError(f"Run '{run_id}' was not found.")
+        if run["status"] in {"failed", "canceled"}:
+            return self._run_from_row(run) or {}
+        rows = conn.execute(
+            "SELECT lifecycle_state, COUNT(*) AS n FROM reports WHERE run_id = ? GROUP BY lifecycle_state",
+            (run_id,),
+        ).fetchall()
+        states = {row["lifecycle_state"]: row["n"] for row in rows}
+        pending = sum(
+            count for state, count in states.items() if state in REVIEW_PENDING_REPORT_STATES
+        )
+        counters = json_loads(run["counters_json"], {})
+        # The worker materializes every unresolved observation into one
+        # durable UNMAPPED triage report, so it is represented by the same
+        # actionable state count as every other review item. Keep the
+        # observation counter for progress/audit, but do not add it again here
+        # or one triage report would appear as N pending items.
+        terminal = "awaiting_review" if pending else "completed"
+        current = now or utc_now()
+        counters.update(
+            {
+                "reports_total": sum(states.values()),
+                "reports_completed": sum(states.values()),
+                "reports_review_pending": pending,
+                "reports_auto_passed": states.get("auto_passed", 0),
+                "reports_flagged": states.get("auto_flagged", 0),
+            }
+        )
+        assignments = [
+            "status = ?",
+            "counters_json = ?",
+            "updated_at = ?",
+            "generation_finished_at = COALESCE(generation_finished_at, ?)",
+            "finished_at = CASE WHEN ? = 'completed' THEN COALESCE(finished_at, ?) ELSE finished_at END",
+            "version = version + 1",
+        ]
+        params: list[Any] = [terminal, json_dumps(counters), current, current, terminal, current]
+        if phase is not None:
+            assignments.append("phase = ?")
+            params.append(phase)
+        params.append(run_id)
+        conn.execute(
+            f"UPDATE analysis_runs SET {', '.join(assignments)} WHERE id = ?",
+            params,
+        )
+        updated = conn.execute("SELECT * FROM analysis_runs WHERE id = ?", (run_id,)).fetchone()
+        return self._run_from_row(updated) or {}
+
     def recompute_run_completion(self, run_id: str) -> dict[str, Any]:
         """Apply the review gate after generation/review/delete transitions."""
         with self.transaction() as conn:
-            run = conn.execute("SELECT * FROM analysis_runs WHERE id = ?", (run_id,)).fetchone()
-            if run is None:
-                raise NotFoundError(f"Run '{run_id}' was not found.")
-            if run["status"] in {"failed", "canceled"}:
-                return self._run_from_row(run) or {}
-            rows = conn.execute(
-                "SELECT lifecycle_state, COUNT(*) AS n FROM reports WHERE run_id = ? GROUP BY lifecycle_state",
-                (run_id,),
-            ).fetchall()
-            states = {row["lifecycle_state"]: row["n"] for row in rows}
-            pending = sum(
-                count for state, count in states.items() if state in REVIEW_PENDING_REPORT_STATES
-            )
-            counters = json_loads(run["counters_json"], {})
-            # The worker materializes every unresolved observation into one
-            # durable UNMAPPED triage report, so it is represented by the
-            # same actionable state count as every other review item. Keep
-            # the observation counter for progress/audit, but do not add it
-            # again here or one triage report would appear as N pending items.
-            terminal = "awaiting_review" if pending else "completed"
-            now = utc_now()
-            counters.update(
-                {
-                    "reports_total": sum(states.values()),
-                    "reports_completed": sum(states.values()),
-                    "reports_review_pending": pending,
-                    "reports_auto_passed": states.get("auto_passed", 0),
-                    "reports_flagged": states.get("auto_flagged", 0),
-                }
-            )
-            conn.execute(
-                """
-                UPDATE analysis_runs
-                SET status = ?, counters_json = ?, updated_at = ?,
-                    generation_finished_at = COALESCE(generation_finished_at, ?),
-                    finished_at = CASE WHEN ? = 'completed' THEN COALESCE(finished_at, ?) ELSE finished_at END,
-                    version = version + 1
-                WHERE id = ?
-                """,
-                (terminal, json_dumps(counters), now, now, terminal, now, run_id),
-            )
-            updated = conn.execute("SELECT * FROM analysis_runs WHERE id = ?", (run_id,)).fetchone()
-        return self._run_from_row(updated) or {}
+            return self._recompute_run_completion_locked(conn, run_id)

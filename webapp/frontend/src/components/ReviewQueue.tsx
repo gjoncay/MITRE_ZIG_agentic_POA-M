@@ -83,7 +83,7 @@ export default function ReviewQueue({ onOpenReport, onOpenRun }: ReviewQueueProp
           <div className="data-label">Required human decisions</div>
           <h2 className="text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>Review queue</h2>
           <p className="mt-1 max-w-3xl text-sm" style={{ color: "var(--text-secondary)" }}>
-            A run stays awaiting review while any report needs a decision or rework. A rejection is retained in the audit history but is not a pass; it remains actionable until rework or an accepted replacement resolves it. Review provenance before accepting an LLM-assisted mapping.
+            A run stays awaiting review while any report needs a decision or rework. A rejection is retained in the audit history but is not a pass; it remains actionable until rework or an accepted replacement resolves it. Open a run's progress page to record one auditable approval across all of that run's current pending reports after reviewing the evidence.
           </p>
         </div>
         <button type="button" onClick={() => setRefresh((value) => value + 1)} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>Refresh queue</button>

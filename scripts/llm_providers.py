@@ -414,7 +414,7 @@ class _ChatCompletionMixin:
 class LocalOpenAICompatProvider(_ChatCompletionMixin, LLMProvider):
     """Talks to any local server exposing the OpenAI chat-completions API (Ollama, LM Studio, vLLM, llama.cpp)."""
 
-    def __init__(self):
+    def __init__(self, *, model_name=None):
         if not OPENAI_ENABLED:
             raise ImportError("The 'openai' package is required for LocalOpenAICompatProvider.")
         self.base_url = os.environ.get('LOCAL_LLM_BASE_URL', 'http://localhost:11434/v1')
@@ -423,7 +423,10 @@ class LocalOpenAICompatProvider(_ChatCompletionMixin, LLMProvider):
         # server does not require authentication, so retain the placeholder in
         # that case.
         self.api_key = os.environ.get('LOCAL_LLM_API_KEY') or 'not-needed'
-        self.model = os.environ.get('LOCAL_LLM_MODEL', 'llama3.1')
+        # The durable web worker supplies the selected model explicitly for a
+        # run.  Falling back to the environment preserves CLI compatibility,
+        # but no request mutates process-global environment state.
+        self.model = str(model_name or os.environ.get('LOCAL_LLM_MODEL') or 'llama3.1').strip()
         LLMProvider.__init__(self, ProviderStatus(
             requested_provider="local", effective_provider="local", model=self.model,
             data_egress="local_network",
@@ -589,13 +592,20 @@ class HeuristicFallbackProvider(LLMProvider):
         }
 
 
-def get_provider(name=None) -> LLMProvider:
-    """Factory that always returns a usable provider, degrading to the heuristic fallback on any error."""
+def get_provider(name=None, *, model_name=None) -> LLMProvider:
+    """Return a local-only provider without allowing cloud-provider fallback.
+
+    The web API accepts only ``local`` submissions.  Keep this factory
+    defensive too: a stale CLI/config value such as ``openai`` or ``gemini``
+    must never create a cloud client or transmit retained evidence.  The
+    hosted provider classes remain importable for backwards-compatible unit
+    tests, but are intentionally unreachable through the factory.
+    """
     name = (name or os.environ.get('LLM_PROVIDER', 'none') or 'none').lower()
 
     if name == 'local':
         try:
-            return LocalOpenAICompatProvider()
+            return LocalOpenAICompatProvider(model_name=model_name)
         except ImportError:
             print("[Warning] LLM_PROVIDER=local but the 'openai' package is not installed. Falling back to heuristic mode.")
             return HeuristicFallbackProvider(name, "local provider package is not installed")
@@ -603,25 +613,9 @@ def get_provider(name=None) -> LLMProvider:
             print(f"[Warning] LLM_PROVIDER=local but {e} Falling back to heuristic mode.")
             return HeuristicFallbackProvider(name, str(e))
 
-    if name == 'openai':
-        try:
-            return OpenAIProvider()
-        except ImportError:
-            print("[Warning] LLM_PROVIDER=openai but the 'openai' package is not installed. Falling back to heuristic mode.")
-            return HeuristicFallbackProvider(name, "OpenAI provider package is not installed")
-        except ValueError:
-            print("[Warning] LLM_PROVIDER=openai but OPENAI_API_KEY is not set. Falling back to heuristic mode.")
-            return HeuristicFallbackProvider(name, "OPENAI_API_KEY is not set")
-
-    if name == 'gemini':
-        try:
-            return GeminiProvider()
-        except ImportError:
-            print("[Warning] LLM_PROVIDER=gemini but the 'google-generativeai' package is not installed. Falling back to heuristic mode.")
-            return HeuristicFallbackProvider(name, "Gemini provider package is not installed")
-        except ValueError:
-            print("[Warning] LLM_PROVIDER=gemini but GEMINI_API_KEY is not set. Falling back to heuristic mode.")
-            return HeuristicFallbackProvider(name, "GEMINI_API_KEY is not set")
+    if name in {'openai', 'gemini'}:
+        print(f"[Warning] LLM_PROVIDER={name} is disabled; cloud providers are not permitted. Falling back to heuristic mode.")
+        return HeuristicFallbackProvider(name, "Cloud providers are disabled; select the local provider")
 
     return HeuristicFallbackProvider(name)
 

@@ -15,6 +15,23 @@ its Tailscale node.
 
 ---
 
+## Application access control
+
+`TS_AUTHKEY` is a Tailscale node-enrollment credential; it is not the web
+application's bearer token. For this project's deliberately private,
+single-operator Tailnet deployment, set `CSDH_AUTH_MODE=disabled` in the
+gitignored `.env` to use Tailnet device access and ACLs as the application
+access boundary. The browser will then not ask for a bearer token.
+
+Choose that mode only when the Tailnet, its ACLs, and every reachable device are
+controlled by the same operator and this sidecar remains the only ingress. Use
+the default `CSDH_AUTH_MODE=token` (or an authenticated trusted proxy) for a
+shared Tailnet, multiple operators, or any additional ingress. See
+`WEB_DEPLOYMENT_OPERATIONS.md` for the exact authentication and local-model
+configuration.
+
+---
+
 ## Environment facts (already true on this machine)
 
 - **Tailnet domain:** `dikdik-macaroni.ts.net` (so hostname `foo` → `https://foo.dikdik-macaroni.ts.net`).

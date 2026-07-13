@@ -494,6 +494,7 @@ def run_pipeline(
     input_csv,
     output_dir,
     provider_name=None,
+    model_name=None,
     limit=None,
     progress_cb=None,
     cancel_cb=None,
@@ -512,7 +513,10 @@ def run_pipeline(
         engine: an already-constructed KnowledgeGraphEngine.
         input_csv: path to the flattened findings CSV from ingest_assessment.py.
         output_dir: directory to write .md/.json reports into (created if missing).
-        provider_name: passed through to get_provider() (None uses LLM_PROVIDER env var).
+        provider_name: passed through to get_provider() (the web path permits
+            only ``local``).
+        model_name: per-run local model selection. This is passed directly to
+            the provider and never written to ``os.environ``.
         limit: maximum number of technique groups to process (None processes all).
         progress_cb: optional callback accepting a structured progress event
             (legacy string callbacks remain supported).
@@ -545,7 +549,7 @@ def run_pipeline(
     groups, skipped_count = group_findings_by_technique(engine, df)
     print(f"Skipped {skipped_count} row(s) with no technique resolution.")
 
-    provider = get_provider(provider_name)
+    provider = get_provider(provider_name, model_name=model_name)
     print(f"Using provider: {type(provider).__name__}")
 
     os.makedirs(output_dir, exist_ok=True)
@@ -897,13 +901,14 @@ def main():
     parser.add_argument("--input", default="processed_assessment.csv", help="Flattened findings CSV from ingest_assessment.py")
     parser.add_argument("--output-dir", default="reports", help="Directory to write .md/.json reports into")
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of technique groups to process (default: all)")
-    parser.add_argument("--provider", default=None, help="Override the LLM_PROVIDER env var (local/openai/gemini/none)")
+    parser.add_argument("--provider", default=None, help="Override the provider (local; cloud values are disabled)")
+    parser.add_argument("--model", default=None, help="Override the local model for this one CLI run")
     args = parser.parse_args()
 
     print("Initializing Knowledge Graph Engine (loading vectors)...")
     engine = KnowledgeGraphEngine()
 
-    run_pipeline(engine, args.input, args.output_dir, provider_name=args.provider, limit=args.limit)
+    run_pipeline(engine, args.input, args.output_dir, provider_name=args.provider, model_name=args.model, limit=args.limit)
 
 
 if __name__ == "__main__":

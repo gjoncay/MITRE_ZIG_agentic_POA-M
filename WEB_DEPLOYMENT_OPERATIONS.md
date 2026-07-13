@@ -59,18 +59,25 @@ Those are legacy paths; the durable web backend writes only below `data/runs`.
    without `chmod 777` or a root-owned database. After changing ownership or
    moving the checkout, verify it again with `stat -c '%u:%g %a' data`.
 
-4. Set `TS_AUTHKEY`, configure web authentication, and choose a provider.
-   Token mode is the production default: set `CSDH_AUTH_TOKENS_JSON` to a
-   nonempty JSON token map with high-entropy secrets, server-derived actor IDs,
-   and least-privilege roles. Alternatively use `CSDH_AUTH_MODE=trusted_proxy`
-   only behind a proxy that authenticates every request and strips/replaces the
-   configured identity and roles headers. `disabled` is development-only. The
-   health endpoint stays degraded and protected API routes are unavailable
-   until token configuration is valid. Leave `LLM_PROVIDER=none` unless a local
-   or cloud model is intentionally enabled. A cloud provider causes submitted
-   evidence to leave the host only after an explicit per-submission (and
-   per-retry) acknowledgement in the UI/API; that acknowledgement is not a
-   replacement for an organization’s data-handling approval.
+4. Set `TS_AUTHKEY`, configure the local LLM, and select an authentication
+   mode. The web application accepts only a local LLM; it never submits
+   evidence to OpenAI, Gemini, or another external model provider. Set
+   `LOCAL_LLM_BASE_URL` to the endpoint reachable from the application
+   container and set `LOCAL_LLM_MODEL` as its default. The UI discovers the
+   models exposed by that endpoint and lets the operator select one per run.
+
+   For a private Tailnet operated by one person, `CSDH_AUTH_MODE=disabled` is
+   supported: the browser will not request a bearer token, and Tailnet device
+   access plus ACLs become the application access boundary. Verify that no
+   untrusted device, user, proxy, or alternate ingress can reach the service
+   before choosing this mode. For a shared or multi-operator deployment, use
+   the conservative default `CSDH_AUTH_MODE=token` with a nonempty
+   `CSDH_AUTH_TOKENS_JSON` map containing high-entropy secrets,
+   server-derived actor IDs, and least-privilege roles. Alternatively use
+   `CSDH_AUTH_MODE=trusted_proxy` only behind a proxy that authenticates every
+   request and strips/replaces the configured identity and roles headers.
+   Token/proxy misconfiguration keeps protected routes unavailable; disabled
+   mode is ready only when explicitly selected.
 5. Validate the resolved configuration, build, and start the stack:
 
    ```bash
@@ -103,14 +110,15 @@ Those are legacy paths; the durable web backend writes only below `data/runs`.
 |---|---:|---|
 | `APP_UID`, `APP_GID` | `1000` | Numeric Linux identity used for the `./data` bind mount. Set to the directory owner. |
 | `TAILSCALE_IMAGE` | `tailscale/tailscale:v1.98` | Version-pinned sidecar image. Use a reviewed digest for a production promotion. |
-| `CSDH_AUTH_MODE` | `token` | `token` (recommended), or `trusted_proxy` behind a correctly sanitizing authenticated proxy. `disabled` is local development only. |
+| `CSDH_AUTH_MODE` | `token` | `token` is recommended for shared or multi-user deployments; `trusted_proxy` requires a correctly sanitizing authenticated proxy. `disabled` is supported for a deliberately private, single-operator Tailnet where Tailscale ACLs/device access are the sole access boundary. |
 | `CSDH_AUTH_TOKENS_JSON` | none | Required in token mode. JSON map from an unpredictable bearer token to `{"actor": ..., "roles": [...]}`. Never commit it. |
 | `CSDH_TRUSTED_PROXY_USER_HEADER` | `X-CSDH-Authenticated-User` | Identity header injected only by the trusted reverse proxy; roles use the same header plus `-Roles`. |
 | `CSDH_SESSION_COOKIE_SECURE` | `true` | Keeps the HttpOnly browser/SSE session cookie HTTPS-only. Do not disable for the Tailscale HTTPS service. |
-| `LLM_PROVIDER` | `none` | `none`, `local`, `openai`, or `gemini`. `none` makes no model-network call. |
-| `LOCAL_LLM_*` | see `.env.example` | OpenAI-compatible local endpoint, model, and optional key. In Compose use `host.docker.internal`, not `localhost`, for a host model server. |
-| `OPENAI_*`, `GEMINI_*` | provider defaults | Cloud provider credentials/model names. Keep keys only in the protected `.env` or a managed secret mechanism. |
-| `LLM_REQUEST_TIMEOUT_SECONDS` | `90` | Per-model request timeout, including each OpenAI-compatible or Gemini graph-planner request. This bounds the wait before the next cancellation checkpoint. |
+| `LLM_PROVIDER` | `local` | Fixed local-only web provider. The API rejects every other provider value and Compose does not pass cloud credentials into the container. |
+| `LOCAL_LLM_BASE_URL` | none | Server-owned OpenAI-compatible local endpoint. The UI discovers models from its `/v1/models` endpoint, with an Ollama `/api/tags` fallback. In Compose use `host.docker.internal`, not `localhost`, for a host model server. |
+| `LOCAL_LLM_MODEL` | `llama3.1` | Default local model. The UI offers discovered model IDs for each analysis and persists the selected model with its run. |
+| `LOCAL_LLM_API_KEY` | none | Optional credential for the local endpoint only. It is never returned by the API or rendered in the browser. |
+| `LLM_REQUEST_TIMEOUT_SECONDS` | `90` | Per-local-model request timeout, including each graph-planner request. This bounds the wait before the next cancellation checkpoint. |
 | `LLM_GRAPH_TOOL_CRAWL` | `enabled` | Lets a non-heuristic provider make a bounded, read-only graph-tool crawl with per-request progress events. |
 | `LLM_GRAPH_TOOL_MAX_CALLS` | `6` | Default maximum provider/tool-plan requests per report; implementation hard-caps it at 12. |
 | `CSDH_MAX_UPLOAD_BYTES` | `26214400` | Maximum uploaded file size (25 MiB). |
@@ -134,10 +142,13 @@ reliable local filesystem locking.
   graph snapshot, and frontend build inputs only. `.env`, Git history,
   uploads, reports, databases, raw source material, local venvs, and dependency
   directories do not enter the build context or image.
-- Tailscale limits network reachability; it is not report-level authorization.
-  Restrict tailnet membership/ACLs and configure application authentication.
-  The server, not a request body, derives reviewer/deletion actor identities.
-  Treat all submitted files and model output as untrusted.
+- Tailscale limits network reachability. In `token` or `trusted_proxy` mode it
+  is not a substitute for application authorization; restrict tailnet
+  membership/ACLs and let the server derive reviewer/deletion actor identities.
+  In explicitly disabled mode, those Tailnet ACLs and device controls *are* the
+  application access boundary, so use that mode only for a private,
+  single-operator Tailnet and review its membership before deployment. Treat
+  all submitted files and model output as untrusted.
 - The Tailscale sidecar uses userspace networking and is the only intended
   ingress. Do not add `ports:` casually or expose Uvicorn directly to a LAN.
 - If a host LLM is used, bind it only as broadly as needed and firewall its port
@@ -160,8 +171,9 @@ reliable local filesystem locking.
 
    `app-ts` shares the application network namespace. Recreating only `app`
    can leave the sidecar attached to the old container identity.
-5. Verify `/api/health`, a no-provider test submission, the run progress stream,
-   and an approved/flagged report path before accepting new evidence.
+5. Verify `/api/health`, the local-model selector (or its clear configuration
+   warning), a local-model test submission, the run progress stream, and an
+   approved/flagged report path before accepting new evidence.
 
 The Dockerfile pins Node and Python to explicit patch tags, and Compose pins
 Tailscale to a version tag. Before a regulated promotion, resolve the exact
@@ -234,10 +246,15 @@ reviewed.
 - If the sidecar becomes unreachable after an app rebuild, run
   `docker compose up -d --force-recreate app app-ts` and inspect
   `docker compose logs app-ts`.
-- If a cloud provider was selected unexpectedly, stop accepting new artifacts,
-  inspect the run’s requested/effective provider and audit events, rotate any
-  exposed provider credential, and preserve the affected workspace for the
-  incident process.
+- If the local-model selector reports that discovery failed, confirm that
+  `LOCAL_LLM_BASE_URL` is reachable from the application container and that
+  the configured model exists. A host model server is usually reachable through
+  `host.docker.internal`, not the container's `localhost`. Discovery failure
+  does not expose the endpoint URL or local API key to the browser.
+- If the API reports that a provider is not allowed, refresh/rebuild the UI and
+  select the only supported value: `local`. Cloud-provider submissions are
+  deliberately rejected and the Compose service does not receive cloud API
+  credentials.
 - If a restart occurs during analysis, inspect the durable `run_interrupted_for_shutdown`
   and `run_recovered` events after startup. The rerun should be a clean replay
   from the retained source artifact; it must not contain duplicate observations

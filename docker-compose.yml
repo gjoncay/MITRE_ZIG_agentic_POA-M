@@ -34,11 +34,9 @@ services:
       - HOME=/tmp
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
-      - LLM_PROVIDER=${LLM_PROVIDER:-none}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-1.5-flash}
+      # The web API accepts only the local provider.  Do not pass cloud API
+      # credentials into this container, even if they exist in the host shell.
+      - LLM_PROVIDER=${LLM_PROVIDER:-local}
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-llama3.1}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
@@ -52,9 +50,9 @@ services:
       - CSDH_MAX_TEXT_CHARACTERS=${CSDH_MAX_TEXT_CHARACTERS:-2000000}
       - CSDH_WORKER_CONCURRENCY=${CSDH_WORKER_CONCURRENCY:-1}
       - CSDH_DELETE_RETENTION_HOURS=${CSDH_DELETE_RETENTION_HOURS:-720}
-      # Authentication is mandatory in production. Token mode is the default;
-      # trusted_proxy is permitted only when a proxy strips/spoofs neither
-      # header and injects identity after authenticating the request.
+      # Token mode remains the conservative default for shared deployments.
+      # A single-operator tailnet can explicitly set CSDH_AUTH_MODE=disabled
+      # in .env; then Tailscale ACLs/device access are the access boundary.
       - CSDH_AUTH_MODE=${CSDH_AUTH_MODE:-token}
       - CSDH_AUTH_TOKENS_JSON=${CSDH_AUTH_TOKENS_JSON:-}
       - CSDH_TRUSTED_PROXY_USER_HEADER=${CSDH_TRUSTED_PROXY_USER_HEADER:-X-CSDH-Authenticated-User}

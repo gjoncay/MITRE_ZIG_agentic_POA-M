@@ -4,7 +4,6 @@ import remarkGfm from "remark-gfm";
 import {
   deleteReport,
   fetchReportPdf,
-  getRun,
   getReport,
   getReportMarkdown,
   getReportRevision,
@@ -280,12 +279,7 @@ export default function ReportDetailView({ report, session, onSessionChange, onD
     setRetryingSourceRun(true);
     setDetailError(null);
     try {
-      const sourceRun = current.run_id ? await getRun(current.run_id) : null;
-      const cloudAcknowledged = !sourceRun?.retry_requires_cloud_acknowledgement || window.confirm(
-        `Retry uses ${sourceRun?.retry_provider || "the selected cloud provider"} and will send the retained artifact evidence and bounded graph context to that provider. Continue?`,
-      );
-      if (!cloudAcknowledged) return;
-      const run = await retrySourceRunForReport(report.id, cloudAcknowledged);
+      const run = await retrySourceRunForReport(report.id);
       if (onOpenRun) onOpenRun(run.id);
     } catch (caught) {
       setDetailError(caught instanceof Error ? caught.message : "Unable to start a retry of the source run.");
