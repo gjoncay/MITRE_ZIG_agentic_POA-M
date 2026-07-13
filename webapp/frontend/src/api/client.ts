@@ -511,6 +511,23 @@ export async function restoreReport(reportId: string, args: { actor: string; rea
   return getReport(reportId);
 }
 
+/**
+ * Create a current-template report revision from retained report data and the
+ * current validated graph mappings.
+ *
+ * This deliberately has no provider/model options: the backend endpoint is a
+ * graph-backed presentation refresh, not a source-run retry or a new LLM
+ * request.
+ */
+export async function rerenderReport(reportId: string): Promise<ReportDetail> {
+  await requestJson<unknown>(`/reports/${encodeURIComponent(reportId)}/rerender`, {
+    method: "POST",
+  });
+  // Fetch the canonical detail after the mutation rather than coupling the UI
+  // to a particular acknowledgement payload from the endpoint.
+  return getReport(reportId);
+}
+
 /** Retry the entire retained source run that produced this report. */
 export async function retrySourceRunForReport(reportId: string, cloudAcknowledged = false): Promise<RunSnapshot> {
   const raw = await requestJson<unknown>(`/reports/${encodeURIComponent(reportId)}/retry-source-run`, {

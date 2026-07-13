@@ -13,7 +13,9 @@ import hashlib
 import inspect
 import json
 import re
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -475,3 +477,416 @@ def resolve_pipeline_asset(output_dir: Path, result: Mapping[str, Any], kind: st
         if candidate.is_file():
             return candidate
     return None
+
+
+# ---------------------------------------------------------------------------
+# Renderer-only report refresh
+# ---------------------------------------------------------------------------
+# This intentionally lives beside the durable pipeline adapter rather than in
+# a route handler.  API requests and an operator-approved maintenance/backfill
+# command can therefore call exactly the same evidence/graph/render path.  It
+# never imports or constructs an LLM provider and never calls ``run_pipeline``.
+
+
+def _locator_fingerprint(locator: Any) -> str:
+    """Return a stable source-locator key for durable evidence matching."""
+    return json.dumps(dict(locator), sort_keys=True, separators=(",", ":"), default=str) if isinstance(locator, Mapping) else ""
+
+
+def _observation_to_report_host(observation: Mapping[str, Any]) -> dict[str, Any]:
+    """Adapt one durable observation to the consolidated report host shape."""
+    asset = observation.get("asset") if isinstance(observation.get("asset"), Mapping) else {}
+    return {
+        "ip": str(asset.get("ip") or "N/A"),
+        "hostname": str(asset.get("hostname") or "N/A"),
+        "finding_text": str(observation.get("normalized_text") or "N/A"),
+        "severity": str(observation.get("severity") or "Unknown"),
+        "source_locator": dict(observation.get("source_locator") or {}),
+        "explicit_ids": list(observation.get("explicit_ids") or []),
+    }
+
+
+def _historical_hosts(report_data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Use retained report evidence only as a narrow compatibility fallback.
+
+    A current durable run has source-linked candidates and therefore never
+    needs this path.  It exists for early lifecycle rows that retained an
+    immutable JSON report before per-observation candidate persistence was
+    complete.  It never broadens a multi-technique report to every artifact
+    observation.
+    """
+    values = report_data.get("affected_hosts")
+    if not isinstance(values, list):
+        return []
+    hosts: list[dict[str, Any]] = []
+    for value in values:
+        if not isinstance(value, Mapping):
+            continue
+        hosts.append(
+            {
+                "ip": str(value.get("ip") or "N/A"),
+                "hostname": str(value.get("hostname") or "N/A"),
+                "finding_text": str(value.get("finding_text") or value.get("finding") or "N/A"),
+                "severity": str(value.get("severity") or "Unknown"),
+                "source_locator": dict(value.get("source_locator") or {}),
+                "explicit_ids": list(value.get("explicit_ids") or []),
+            }
+        )
+    return hosts
+
+
+def _select_report_observations(
+    repository: Any,
+    *,
+    report: Mapping[str, Any],
+    report_data: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return only source observations attributable to this report.
+
+    Candidate-to-observation links are the authoritative scope boundary for a
+    technique report.  If an older row lacks those links, exact retained
+    source locators (then the prior report's own retained observation list)
+    provide a conservative compatibility path.  We intentionally do not use
+    all artifact observations as a fallback: one threat-intel item may map to
+    multiple technique reports and that would cross-contaminate revisions.
+    """
+    artifact_id = report.get("artifact_id")
+    if not artifact_id:
+        raise NormalizationError("This report has no retained source artifact and cannot be re-rendered.")
+    observations = repository.list_observations(str(artifact_id))
+    candidates = repository.list_candidates(
+        artifact_id=str(artifact_id), technique_id=report.get("technique_id")
+    )
+    candidate_observation_ids = {
+        str(candidate.get("observation_id"))
+        for candidate in candidates
+        if candidate.get("observation_id")
+    }
+    if candidate_observation_ids:
+        selected = [
+            _observation_to_report_host(observation)
+            for observation in observations
+            if str(observation.get("id")) in candidate_observation_ids
+        ]
+        if selected:
+            return selected, {
+                "selection": "durable_candidate_links",
+                "candidate_count": len(candidates),
+                "observation_count": len(selected),
+            }
+
+    historical = _historical_hosts(report_data)
+    historical_locators = {
+        _locator_fingerprint(host.get("source_locator"))
+        for host in historical
+        if _locator_fingerprint(host.get("source_locator"))
+    }
+    if historical_locators:
+        matched = [
+            _observation_to_report_host(observation)
+            for observation in observations
+            if _locator_fingerprint(observation.get("source_locator")) in historical_locators
+        ]
+        if matched:
+            return matched, {
+                "selection": "retained_source_locator_match",
+                "candidate_count": len(candidates),
+                "observation_count": len(matched),
+            }
+    if historical:
+        return historical, {
+            "selection": "retained_prior_revision_evidence",
+            "candidate_count": len(candidates),
+            "observation_count": len(historical),
+        }
+    raise NormalizationError(
+        "No source observations can be attributed to this report; retry the retained source run instead."
+    )
+
+
+def _severity_breakdown(hosts: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for host in hosts:
+        severity = str(host.get("severity") or "Unknown")
+        result[severity] = result.get(severity, 0) + 1
+    return result
+
+
+def _preserved_narrative(
+    prior_narrative: Mapping[str, Any], report_data: Mapping[str, Any]
+) -> dict[str, str]:
+    """Keep stored analyst prose; a renderer refresh must not draft prose."""
+    fallbacks = {
+        "exploitation_scenario": report_data.get("exploitation_scenario"),
+        "business_impact": report_data.get("business_impact"),
+        "csa_impact_summary": report_data.get("csa_impact_summary"),
+        "architectural_recommendation": report_data.get("cref_recommendation"),
+        "immediate_action": report_data.get("immediate_action"),
+        "short_term_action": report_data.get("short_term_action"),
+        "long_term_action": report_data.get("long_term_action"),
+    }
+    return {
+        key: str(prior_narrative.get(key) or fallbacks[key] or "")
+        for key in fallbacks
+    }
+
+
+def _render_unmapped_triage(
+    *,
+    report: Mapping[str, Any],
+    report_data: Mapping[str, Any],
+    hosts: list[dict[str, Any]],
+    generated_date: str,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Rebuild an UNMAPPED triage revision without pretending it has a TTP."""
+    # Keep untrusted source text inside a Markdown table so it remains visible
+    # to the reviewer while pipes/newlines cannot alter the document shape.
+    def cell(value: Any) -> str:
+        return str(value if value is not None else "N/A").replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+
+    table = ["| Source Excerpt | Severity |", "|---|---|"]
+    for host in hosts:
+        table.append(f"| {cell(host.get('finding_text'))} | {cell(host.get('severity'))} |")
+    display_id = str(report.get("display_id") or report.get("id"))
+    markdown = (
+        f"# {display_id}\n\n"
+        "## Analyst triage required\n\n"
+        f"{len(hosts)} observation(s) did not retain a validated ATT&CK candidate. "
+        "Review the source evidence, record a decision, or retry the complete source run after classification.\n\n"
+        "## Source Observations\n\n"
+        + "\n".join(table)
+        + "\n"
+    )
+    qa_result = {
+        "verdict": "MANUAL_REVIEW_REQUIRED",
+        "notes": "Re-rendered with the current renderer; no LLM/provider or new ATT&CK classification was run.",
+    }
+    report_json = {
+        **dict(report_data),
+        "schema_version": "unmapped-triage-v1",
+        "report_id": report.get("id"),
+        "display_id": display_id,
+        "generated_date": generated_date,
+        "technique_id": "UNMAPPED",
+        "finding_count": len(hosts),
+        "severity_breakdown": _severity_breakdown(hosts),
+        "affected_hosts": [{**host, "finding": host.get("finding_text", "N/A")} for host in hosts],
+        "evidence_preview": [
+            {
+                "source_locator": host.get("source_locator", {}),
+                "severity": host.get("severity"),
+                "explicit_ids": host.get("explicit_ids", []),
+                "text_excerpt": host.get("finding_text", ""),
+            }
+            for host in hosts
+        ],
+        "evidence_preview_omitted": 0,
+        "qa_verdict": qa_result["verdict"],
+        "qa_notes": qa_result["notes"],
+        "lifecycle_state": "manual_review_required",
+        "requires_review": True,
+    }
+    return markdown, report_json, qa_result
+
+
+def rerender_report_from_durable_evidence(
+    *,
+    repository: Any,
+    runs_dir: str | Path,
+    engine: Any,
+    report_id: str,
+    actor_id: str,
+    reason: str = "Re-rendered with current renderer",
+) -> dict[str, Any]:
+    """Append a no-provider report revision from retained evidence/current graph.
+
+    The function is intentionally synchronous so an API route can run it in a
+    worker thread and a maintenance/backfill command can invoke it directly.
+    It performs no model/provider operation: it selects durable source-linked
+    observations, crawls the currently loaded read-only graph, preserves the
+    prior analyst narrative, and renders a new immutable asset pair.
+    """
+    report = repository.get_report(report_id, include_deleted=True)
+    if report is None:
+        raise NormalizationError(f"Report '{report_id}' was not found.")
+    if report.get("lifecycle_state") in {"deleted", "deleting", "restoring"}:
+        raise NormalizationError("A deleted, deleting, or restoring report cannot be re-rendered.")
+    if report.get("lifecycle_state") == "legacy":
+        raise NormalizationError(
+            "Legacy reports do not retain durable source observations and cannot be re-rendered."
+        )
+    prior_revision = repository.get_current_revision(str(report["id"]))
+    if prior_revision is None:
+        raise NormalizationError("Report has no current revision to re-render.")
+    report_data = prior_revision.get("report_data") if isinstance(prior_revision.get("report_data"), Mapping) else {}
+    prior_narrative = prior_revision.get("narrative") if isinstance(prior_revision.get("narrative"), Mapping) else {}
+    workspace = RunWorkspace.open(runs_dir, str(report["run_id"]))
+    revision_id = str(uuid.uuid4())
+    generated_date = datetime.now(timezone.utc).date().isoformat()
+    hosts, source_metadata = _select_report_observations(
+        repository, report=report, report_data=report_data
+    )
+    technique_id = str(report.get("technique_id") or report_data.get("technique_id") or "")
+    template_path = Path(__file__).resolve().parents[2] / "assessment_template_consolidated.md"
+    template_str = template_path.read_text(encoding="utf-8")
+    template_sha256 = hashlib.sha256(template_str.encode("utf-8")).hexdigest()
+
+    if technique_id == "UNMAPPED":
+        markdown, report_json, qa_result = _render_unmapped_triage(
+            report=report,
+            report_data=report_data,
+            hosts=hosts,
+            generated_date=generated_date,
+        )
+        mapping_bundle: Mapping[str, Any] = report_json.get("framework_mappings") if isinstance(report_json.get("framework_mappings"), Mapping) else {}
+        narrative = dict(prior_narrative)
+    else:
+        # Imports stay local: ordinary adapter use and tests that only
+        # normalize artifacts do not pay for report renderer imports.
+        from scripts.consolidate_findings import build_context, crawl_correlation
+        from scripts.report_schema import build_report_json, render_markdown
+        from run_analyst_pipeline import _adapt_context_for_render, _build_render_narrative
+
+        node = engine.query_node(technique_id) if technique_id else None
+        if not isinstance(node, Mapping) or node.get("type") not in {None, "attack_technique"}:
+            raise NormalizationError(
+                "The report technique no longer exists as an ATT&CK technique in the current graph; retry the source run instead."
+            )
+        group_data = {
+            "technique_name": node.get("name") or report.get("technique_name") or report_data.get("technique_name") or technique_id,
+            "technique_description": node.get("description") or report_data.get("technique_description") or "Unknown",
+            "affected_hosts": hosts,
+            "severity_breakdown": _severity_breakdown(hosts),
+            "requires_review": True,
+        }
+        correlation = crawl_correlation(engine, technique_id)
+        context = build_context(technique_id, group_data, correlation)
+        narrative = _preserved_narrative(prior_narrative, report_data)
+        render_context = _adapt_context_for_render(context, narrative)
+        render_narrative = _build_render_narrative(
+            technique_id,
+            render_context,
+            narrative,
+            full_affected_hosts=hosts,
+        )
+        qa_result = {
+            "verdict": "MANUAL_REVIEW_REQUIRED",
+            "notes": "Re-rendered with the current graph and template; no LLM/provider or new QA pass was run. Review this revision before acceptance.",
+        }
+        markdown = render_markdown(
+            template_str,
+            str(report.get("display_id") or report.get("id")),
+            generated_date,
+            technique_id,
+            render_context,
+            render_narrative,
+            qa_result,
+        )
+        report_json = build_report_json(technique_id, render_context, render_narrative, qa_result)
+        mapping_bundle = context.get("framework_mappings") if isinstance(context.get("framework_mappings"), Mapping) else {}
+        report_json.update(
+            {
+                "report_id": report.get("id"),
+                "display_id": report.get("display_id"),
+                "generated_date": generated_date,
+                "schema_version": "2.1",
+                "pipeline_version": "renderer-refresh",
+                "run_id": report.get("run_id"),
+                "lifecycle_state": "manual_review_required",
+                "requires_review": True,
+                "mapping_confidence": {
+                    "requires_review": True,
+                    "rerendered_without_provider": True,
+                },
+                # Preserve historical provider provenance without implying a
+                # provider participated in this renderer-only revision.
+                "provider": report_data.get("provider"),
+                "llm_graph_tool_crawl": {
+                    "status": "not_run",
+                    "reason": "Renderer-only revision; no LLM/provider graph crawl was performed.",
+                    "selected": [],
+                    "audit": {"calls": []},
+                },
+                "llm_graph_tool_validation_required": False,
+                "model_input_policy": report_data.get("model_input_policy"),
+                "affected_hosts": [
+                    {**host, "finding": host.get("finding_text", host.get("finding", "N/A"))}
+                    for host in hosts
+                ],
+            }
+        )
+
+    mapping_snapshot_hash = hashlib.sha256(
+        json.dumps(mapping_bundle, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    rerender_metadata = {
+        "operation": "renderer_refresh",
+        "reason": reason,
+        "rerendered_by": actor_id,
+        "rerendered_from_revision_id": prior_revision.get("id"),
+        "rerendered_from_revision_number": prior_revision.get("revision_number"),
+        "source_observations": source_metadata,
+        "template": {
+            "path": template_path.name,
+            "sha256": template_sha256,
+        },
+        "graph_snapshot_id": mapping_bundle.get("graph_snapshot_id") if isinstance(mapping_bundle, Mapping) else None,
+        "mapping_matrix_version": mapping_bundle.get("mapping_matrix_version") if isinstance(mapping_bundle, Mapping) else None,
+        "provider_calls": {"made": False, "reason": "renderer_only"},
+    }
+    report_json["rerender"] = {
+        **rerender_metadata,
+        "revision_id": revision_id,
+    }
+    report_json["mapping_snapshot_hash"] = mapping_snapshot_hash
+    report_json["qa_verdict"] = qa_result["verdict"]
+    report_json["qa_notes"] = qa_result["notes"]
+    report_json["lifecycle_state"] = "manual_review_required"
+    report_json["requires_review"] = True
+
+    assets = workspace.publish_rendered_revision_assets(
+        report_id=str(report["id"]),
+        revision_id=revision_id,
+        markdown=markdown,
+        report_json=json.dumps(report_json, indent=2, ensure_ascii=False, default=str),
+    )
+    markdown_path = workspace.resolve_relative(assets["markdown_path"])
+    json_path = workspace.resolve_relative(assets["json_path"])
+    try:
+        updated = repository.append_rerendered_revision(
+            report_id=str(report["id"]),
+            revision_id=revision_id,
+            expected_report_version=int(report["version"]),
+            expected_current_revision_id=str(prior_revision["id"]),
+            report_data=report_json,
+            narrative=narrative,
+            markdown_path=assets["markdown_path"],
+            json_path=assets["json_path"],
+            markdown_sha256=RunWorkspace.sha256_file(markdown_path) or "",
+            json_sha256=RunWorkspace.sha256_file(json_path) or "",
+            mapping_snapshot_hash=mapping_snapshot_hash,
+            created_by=actor_id,
+            metadata=rerender_metadata,
+            finding_count=len(hosts),
+            severity_breakdown=_severity_breakdown(hosts),
+        )
+    except BaseException:
+        # The assets are in a newly generated UUID directory and no revision
+        # row references them when the append transaction fails. Compensate
+        # this exact uncommitted directory without ever touching revision 1
+        # or any older immutable asset.
+        try:
+            workspace.discard_uncommitted_rendered_revision_assets(
+                report_id=str(report["id"]), revision_id=revision_id
+            )
+        except Exception:
+            # The DB conflict/error remains the useful caller-facing failure;
+            # an orphaned unique directory is harmless and can be inspected.
+            pass
+        raise
+    return {
+        "report": updated,
+        "revision_id": revision_id,
+        "source_observation_count": len(hosts),
+        "mapping_snapshot_hash": mapping_snapshot_hash,
+    }

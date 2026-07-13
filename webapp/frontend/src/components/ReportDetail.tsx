@@ -10,6 +10,7 @@ import {
   getReportRevision,
   getBrowserSession,
   normalizeReportSummary,
+  rerenderReport,
   retrySourceRunForReport,
   restoreReport,
   reviewReport,
@@ -87,6 +88,10 @@ export default function ReportDetailView({ report, session, onSessionChange, onD
   const [restoring, setRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [retryingSourceRun, setRetryingSourceRun] = useState(false);
+  const [showRerender, setShowRerender] = useState(false);
+  const [rerendering, setRerendering] = useState(false);
+  const [rerenderError, setRerenderError] = useState<string | null>(null);
+  const [rerenderStatus, setRerenderStatus] = useState<string | null>(null);
   const [selectedRevision, setSelectedRevision] = useState<ReportRevision | null>(null);
   const [revisionLoading, setRevisionLoading] = useState(false);
   const [revisionError, setRevisionError] = useState<string | null>(null);
@@ -106,10 +111,13 @@ export default function ReportDetailView({ report, session, onSessionChange, onD
     setReviewError(null);
     setShowDelete(false);
     setShowRestore(false);
+    setShowRerender(false);
     setSessionError(null);
     setDeleteReason("");
     setRestoreReason("");
     setRestoreError(null);
+    setRerenderError(null);
+    setRerenderStatus(null);
 
     void getReport(report.id)
       .then((loaded) => {
@@ -286,6 +294,39 @@ export default function ReportDetailView({ report, session, onSessionChange, onD
     }
   }
 
+  async function handleRerenderReport() {
+    setRerendering(true);
+    setRerenderError(null);
+    setRerenderStatus(null);
+    try {
+      const updated = await rerenderReport(report.id);
+      setDetail(updated);
+      setSelectedRevision(updated.current_revision ?? updated.revisions[0] ?? null);
+      onUpdated(normalizeReportSummary(updated));
+      setShowRerender(false);
+      setTab("report");
+
+      // Markdown is a separately cached representation, so refresh it after
+      // the renderer succeeds instead of relying on the pre-action response.
+      setMarkdownLoading(true);
+      try {
+        const refreshedMarkdown = await getReportMarkdown(report.id);
+        setMarkdown(refreshedMarkdown);
+        setMarkdownError(null);
+      } catch (caught) {
+        setMarkdown(updated.markdown ?? null);
+        setMarkdownError(caught instanceof Error ? caught.message : "The report was re-rendered, but its Markdown export could not be refreshed.");
+      } finally {
+        setMarkdownLoading(false);
+      }
+      setRerenderStatus("A new report revision was re-rendered with the current template and graph-backed presentation data, then returned to manual review. No source-run replay or LLM request was run.");
+    } catch (caught) {
+      setRerenderError(caught instanceof Error ? caught.message : "Unable to re-render this report.");
+    } finally {
+      setRerendering(false);
+    }
+  }
+
   async function selectRevision(revision: ReportRevision) {
     setSelectedRevision(revision);
     setRevisionError(null);
@@ -310,7 +351,7 @@ export default function ReportDetailView({ report, session, onSessionChange, onD
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{current.finding_count} linked finding{current.finding_count === 1 ? "" : "s"}{current.run_id ? " · durable run provenance available" : " · legacy report"}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 print-hide">
-          {isDeleted ? <button type="button" onClick={() => { setShowRestore(true); setRestoreError(null); }} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--accent-positive)", color: "var(--accent-positive)" }}>Restore report</button> : <>{current.run_id && onOpenRun ? <button type="button" onClick={() => onOpenRun(current.run_id!)} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>Run progress</button> : null}{current.lifecycle_state !== "legacy" && onOpenRun ? <button type="button" onClick={() => void handleRetrySourceRun()} disabled={retryingSourceRun} title="Creates a new analysis run for the retained source artifact and regenerates every report from it." className="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--accent-warning)", color: "var(--accent-warning)" }}>{retryingSourceRun ? "Starting source-run retry…" : "Retry source run"}</button> : null}<button type="button" onClick={() => void handleExportPdf()} disabled={exporting} className="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>{exporting ? "Exporting…" : "Export PDF"}</button>{canDelete ? <button type="button" onClick={() => { setShowDelete(true); setDeleteError(null); }} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--accent-negative)", color: "var(--accent-negative)" }}>Delete</button> : <span className="text-xs" title="Record an accepted review decision before deleting this report so the run cannot finish with unreviewed work." style={{ color: "var(--text-tertiary)" }}>Delete unlocks after review</span>}</>}
+          {isDeleted ? <button type="button" onClick={() => { setShowRestore(true); setRestoreError(null); }} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--accent-positive)", color: "var(--accent-positive)" }}>Restore report</button> : <>{current.run_id && onOpenRun ? <button type="button" onClick={() => onOpenRun(current.run_id!)} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>Run progress</button> : null}{current.lifecycle_state !== "legacy" ? <button type="button" onClick={() => { setShowRerender(true); setRerenderError(null); }} disabled={rerendering} title="Creates a new report revision with current graph-backed presentation data without submitting evidence to an LLM or retrying the source run." className="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--accent-primary)", color: "var(--accent-primary)" }}>{rerendering ? "Re-rendering…" : "Re-render with current template"}</button> : null}{current.lifecycle_state !== "legacy" && onOpenRun ? <button type="button" onClick={() => void handleRetrySourceRun()} disabled={retryingSourceRun} title="Creates a new analysis run for the retained source artifact and regenerates every report from it." className="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--accent-warning)", color: "var(--accent-warning)" }}>{retryingSourceRun ? "Starting source-run retry…" : "Retry source run"}</button> : null}<button type="button" onClick={() => void handleExportPdf()} disabled={exporting} className="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>{exporting ? "Exporting…" : "Export PDF"}</button>{canDelete ? <button type="button" onClick={() => { setShowDelete(true); setDeleteError(null); }} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--accent-negative)", color: "var(--accent-negative)" }}>Delete</button> : <span className="text-xs" title="Record an accepted review decision before deleting this report so the run cannot finish with unreviewed work." style={{ color: "var(--text-tertiary)" }}>Delete unlocks after review</span>}</>}
         </div>
       </header>
 
@@ -321,6 +362,7 @@ export default function ReportDetailView({ report, session, onSessionChange, onD
 
         <div className="px-4 py-5 sm:px-6">
           {detailError ? <div className="mb-4 rounded-md border px-4 py-3 text-sm" style={{ borderColor: "var(--accent-negative)", backgroundColor: "var(--accent-negative-glow)", color: "var(--accent-negative)" }}>{detailError}</div> : null}
+          {rerenderStatus ? <div className="mb-4 rounded-md border px-4 py-3 text-sm" role="status" style={{ borderColor: "var(--accent-positive)", backgroundColor: "var(--accent-positive-glow)", color: "var(--accent-positive)" }}>{rerenderStatus}</div> : null}
           {detailLoading && tab !== "report" ? <p style={{ color: "var(--text-secondary)" }}>Loading auditable report data…</p> : null}
           {!detailLoading || tab === "report" ? <>
             {tab === "report" ? <ReportTab loading={markdownLoading} markdown={effectiveMarkdown} error={markdownError} fallback={sources} /> : null}
@@ -351,6 +393,7 @@ export default function ReportDetailView({ report, session, onSessionChange, onD
 
       {showDelete ? <DeleteDialog report={current} actor={isDevelopment ? developmentActor : authenticatedActor} developmentMode={isDevelopment} sessionError={effectiveSessionError} reason={deleteReason} error={deleteError} deleting={deleting} onActorChange={setDevelopmentActor} onReasonChange={setDeleteReason} onCancel={() => setShowDelete(false)} onConfirm={() => void handleDelete()} /> : null}
       {showRestore ? <RestoreDialog report={current} actor={isDevelopment ? developmentActor : authenticatedActor} developmentMode={isDevelopment} sessionError={effectiveSessionError} reason={restoreReason} error={restoreError} restoring={restoring} onActorChange={setDevelopmentActor} onReasonChange={setRestoreReason} onCancel={() => setShowRestore(false)} onConfirm={() => void handleRestore()} /> : null}
+      {showRerender ? <RerenderDialog report={current} error={rerenderError} rerendering={rerendering} onCancel={() => setShowRerender(false)} onConfirm={() => void handleRerenderReport()} /> : null}
     </div>
   );
 }
@@ -475,6 +518,10 @@ function DeleteDialog({ report, actor, developmentMode, sessionError, reason, er
 function RestoreDialog({ report, actor, developmentMode, sessionError, reason, error, restoring, onActorChange, onReasonChange, onCancel, onConfirm }: { report: ReportSummary; actor: string | null; developmentMode: boolean; sessionError: string | null; reason: string; error: string | null; restoring: boolean; onActorChange: (value: string) => void; onReasonChange: (value: string) => void; onCancel: () => void; onConfirm: () => void }) {
   const identityReady = Boolean(actor?.trim());
   return <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="restore-report-title" style={{ backgroundColor: "var(--bg-scrim)" }}><div className="w-full max-w-lg rounded-lg border p-5 shadow-lg" style={{ borderColor: "var(--border-default)", backgroundColor: "var(--bg-overlay)" }}><h2 id="restore-report-title" className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>Restore report?</h2><p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}><span className="mono">{report.display_id || report.report_id}</span> will return to its last accepted lifecycle state and be recorded in the restoration audit trail.</p><div className="mt-4"><div className="data-label">{developmentMode ? "Operator identity" : "Authenticated operator"}</div>{developmentMode ? <input value={actor || ""} onChange={(event) => onActorChange(event.target.value)} placeholder="Reviewer or operator identity" aria-label="Operator identity" className="mt-2 w-full rounded-md border px-3 py-2 text-sm outline-none" style={{ borderColor: "var(--border-default)", backgroundColor: "var(--bg-base)", color: "var(--text-primary)" }} /> : <div className="mt-2 rounded-md border px-3 py-2 text-sm" aria-label="Authenticated operator identity" title="This identity comes from the current server session and cannot be edited here." style={{ borderColor: "var(--border-default)", backgroundColor: "var(--bg-raised)", color: "var(--text-primary)" }}>{actor || "Checking authenticated session…"}</div>}</div><label className="data-label mt-4 block" htmlFor="restore-reason">Reason for restoration</label><textarea id="restore-reason" value={reason} onChange={(event) => onReasonChange(event.target.value)} rows={3} className="mt-2 w-full rounded-md border p-3 text-sm outline-none" style={{ borderColor: "var(--border-default)", backgroundColor: "var(--bg-base)", color: "var(--text-primary)" }} placeholder="Restore after verification…" />{sessionError ? <p className="mt-2 text-sm" style={{ color: "var(--accent-warning)" }}>{sessionError}</p> : null}{error ? <p className="mt-2 text-sm" style={{ color: "var(--accent-negative)" }}>{error}</p> : null}<div className="mt-4 flex justify-end gap-2"><button type="button" onClick={onCancel} disabled={restoring} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>Cancel</button><button type="button" onClick={onConfirm} disabled={restoring || !identityReady} className="rounded-md px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" style={{ backgroundColor: "var(--accent-positive)" }}>{restoring ? "Restoring…" : "Restore report"}</button></div></div></div>;
+}
+
+function RerenderDialog({ report, error, rerendering, onCancel, onConfirm }: { report: ReportSummary; error: string | null; rerendering: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="rerender-report-title" style={{ backgroundColor: "var(--bg-scrim)" }}><div className="w-full max-w-lg rounded-lg border p-5 shadow-lg" style={{ borderColor: "var(--border-default)", backgroundColor: "var(--bg-overlay)" }}><h2 id="rerender-report-title" className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>Re-render with current template?</h2><p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}><span className="mono">{report.display_id || report.report_id}</span> will receive a new immutable revision rebuilt from its retained structured report data and current validated graph mappings.</p><div className="mt-4 rounded-md border px-3 py-3 text-sm" style={{ borderColor: "var(--accent-primary)", backgroundColor: "var(--accent-glow)", color: "var(--text-primary)" }}><strong>This is a graph-backed presentation refresh.</strong> It does not submit evidence to an LLM or retry the source run. The resulting revision will return to manual review so its updated output can be verified.</div>{error ? <p className="mt-3 text-sm" style={{ color: "var(--accent-negative)" }}>{error}</p> : null}<div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onCancel} disabled={rerendering} className="rounded-md border px-3 py-2 text-sm font-medium" style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}>Cancel</button><button type="button" onClick={onConfirm} disabled={rerendering} className="rounded-md px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" style={{ backgroundColor: "var(--accent-primary)" }}>{rerendering ? "Re-rendering…" : "Create re-rendered revision"}</button></div></div></div>;
 }
 
 function SectionHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {

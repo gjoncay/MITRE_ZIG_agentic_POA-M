@@ -82,6 +82,86 @@ def _passing_runner(_engine, _input_csv, output_dir, provider_name=None, progres
     return [payload]
 
 
+class _RerenderEngine:
+    """Small graph double exercising renderer-only current-graph output."""
+
+    graph_snapshot_id = "sha256:rerender-test-graph"
+
+    def query_node(self, node_id: str):
+        if node_id == "T1003":
+            return {
+                "id": "T1003",
+                "type": "attack_technique",
+                "name": "OS Credential Dumping",
+                "description": "Adversaries may dump credentials from operating systems.",
+            }
+        return None
+
+    def get_framework_bundle(self, technique_id: str):
+        assert technique_id == "T1003"
+        return {
+            "graph_snapshot_id": self.graph_snapshot_id,
+            "mapping_matrix_version": "rerender-test-v1",
+            "mapping_validation": {"state": "valid"},
+            "not_mapped_categories": [],
+            "attack_tactics": [{"tactic_id": "TA0006", "tactic_name": "Credential Access"}],
+            "analytics": [
+                {"analytic_id": "AN0001", "analytic_description": "First current analytic"},
+                {"analytic_id": "AN0002", "analytic_description": "Second current analytic"},
+                {"analytic_id": "AN0003", "analytic_description": "Third current analytic"},
+            ],
+            "d3fend": [
+                {"d3fend_id": "D3-ONE", "d3fend_name": "First countermeasure"},
+                {"d3fend_id": "D3-TWO", "d3fend_name": "Second countermeasure"},
+                {"d3fend_id": "D3-THREE", "d3fend_name": "Third countermeasure"},
+            ],
+            "zig": [
+                {
+                    "pillar_id": "ZIG-PILLAR-1",
+                    "pillar_name": "Identity",
+                    "capability_id": "ZIG-CAP-1",
+                    "capability_name": "Identity capability",
+                    "activity_id": "ZIG-ACT-1",
+                    "activity_name": "Identity activity",
+                }
+            ],
+            "cref": [
+                {
+                    "goal_id": "CREF-GOAL-1",
+                    "goal_name": "Anticipate",
+                    "objective_id": "CREF-OBJ-1",
+                    "objective_name": "Prevent or Avoid",
+                    "technique_id": "CREF-TECH-1",
+                    "technique_name": "Coordinated Protection",
+                    "approach_id": "CREF-APP-1",
+                    "approach_name": "Dynamic Threat Awareness",
+                    "effect_id": "CREF-EFFECT-1",
+                    "effect_name": "Detect",
+                }
+            ],
+            "mitigations": [
+                {
+                    "mitigation_id": "M1027",
+                    "mitigation_name": "Operating System Configuration",
+                    "nist_800_53_controls": ["CM-6"],
+                    "zig_activity_ids": ["ZIG-ACT-1"],
+                }
+            ],
+            "csa": [{"csa_id": "CSA-1", "csa_name": "Control Access"}],
+            "paths": [
+                {
+                    "validation": {"state": "valid"},
+                    "nodes": [
+                        {"id": "T1003", "type": "attack_technique", "name": "OS Credential Dumping"},
+                        {"id": "ART-1", "type": "defensive_artifact", "name": "Credential material"},
+                        {"id": "ZIG-TECH-1", "type": "zig_technology", "name": "Privileged access management"},
+                        {"id": "ZIG-TECH-2", "type": "zig_technology", "name": "Endpoint detection"},
+                    ],
+                }
+            ],
+        }
+
+
 async def _wait_for_terminal(client: httpx.AsyncClient, run_id: str) -> dict:
     for _ in range(100):
         payload = (await client.get(f"/api/runs/{run_id}")).json()
@@ -155,6 +235,84 @@ def test_run_isolated_review_gated_and_restorable(tmp_path: Path) -> None:
                 )
                 assert restored.status_code == 200
                 assert restored.json()["report"]["lifecycle_state"] == "approved"
+
+    asyncio.run(scenario())
+
+
+def test_renderer_refresh_appends_immutable_revision_without_provider_calls(tmp_path: Path) -> None:
+    """A current-template refresh keeps rev. 1/reviews and reopens review."""
+
+    async def scenario() -> None:
+        settings = _settings(tmp_path)
+        calls = {"pipeline": 0}
+
+        def runner(*args, **kwargs):
+            calls["pipeline"] += 1
+            return _runner(*args, **kwargs)
+
+        app = create_app(settings, engine_factory=_RerenderEngine, pipeline_runner=runner)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                created = await client.post("/api/runs", data={"text": "T1003 credential dumping observed.", "provider": "local"})
+                assert created.status_code == 202
+                run_id = created.json()["id"]
+                await _wait_for_terminal(client, run_id)
+                report = (await client.get("/api/reports", params={"run_id": run_id})).json()[0]
+                report_id = report["report_id"]
+                before = (await client.get(f"/api/reports/{report_id}")).json()
+                original_revision_id = before["current_revision"]["id"]
+                original_version = before["version"]
+                original_asset = settings.runs_dir / run_id / "reports" / report_id / "report.md"
+                original_markdown = original_asset.read_text(encoding="utf-8")
+                assert original_markdown == "# Test report\n"
+
+                # An existing approval stays linked to revision 1, not silently
+                # transferred to the changed renderer output.
+                approved = await client.patch(
+                    f"/api/reports/{report_id}/review",
+                    json={
+                        "decision": "approve",
+                        "actor": "reviewer",
+                        "note": "Approved the original immutable revision.",
+                        "version": original_version,
+                    },
+                )
+                assert approved.status_code == 200
+                assert approved.json()["run"]["status"] == "completed"
+
+                refreshed = await client.post(f"/api/reports/{report_id}/rerender")
+                assert refreshed.status_code == 200, refreshed.text
+                detail = refreshed.json()
+                assert detail["lifecycle_state"] == "manual_review_required"
+                assert detail["qa_verdict"] == "MANUAL_REVIEW_REQUIRED"
+                assert detail["version"] == original_version + 2  # review + re-render
+                assert [revision["revision_number"] for revision in detail["revisions"]] == [2, 1]
+                assert detail["current_revision"]["id"] != original_revision_id
+                assert calls == {"pipeline": 1}  # refresh did not rerun analysis/LLM pipeline
+
+                current_markdown = (await client.get(f"/api/reports/{report_id}/markdown")).text
+                assert "[AN0001] First current analytic" in current_markdown
+                assert "[AN0003] Third current analytic" in current_markdown
+                assert "[D3-THREE] Third countermeasure" in current_markdown
+                assert "see JSON/API" not in current_markdown
+                assert original_asset.read_text(encoding="utf-8") == original_markdown
+
+                old_revision = (await client.get(f"/api/reports/{report_id}/revisions/{original_revision_id}")).json()
+                assert old_revision["current_revision"]["id"] == original_revision_id
+                assert old_revision["qa_verdict"] == "MANUAL_REVIEW_REQUIRED" or old_revision["qa_verdict"] == "FLAG"
+                reviews = detail["reviews"]
+                assert len(reviews) == 1
+                assert reviews[0]["report_revision_id"] == original_revision_id
+
+                current = app.state.repository.get_current_revision(report_id)
+                assert current is not None
+                assert current["created_by"] == "development-local"
+                assert current["metadata"]["operation"] == "renderer_refresh"
+                assert current["metadata"]["rerendered_from_revision_id"] == original_revision_id
+                assert current["metadata"]["provider_calls"] == {"made": False, "reason": "renderer_only"}
+                assert "/revisions/" in current["markdown_path"]
+                run = (await client.get(f"/api/runs/{run_id}")).json()
+                assert run["status"] == "awaiting_review"
 
     asyncio.run(scenario())
 

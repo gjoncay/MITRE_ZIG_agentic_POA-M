@@ -1188,6 +1188,106 @@ class LifecycleRepository:
             row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
         return self._report_from_row(row)
 
+    def append_rerendered_revision(
+        self,
+        *,
+        report_id: str,
+        revision_id: str,
+        expected_report_version: int,
+        expected_current_revision_id: str,
+        report_data: Mapping[str, Any],
+        narrative: Mapping[str, Any],
+        markdown_path: str,
+        json_path: str,
+        markdown_sha256: str,
+        json_sha256: str,
+        mapping_snapshot_hash: str | None,
+        created_by: str,
+        metadata: Mapping[str, Any],
+        finding_count: int,
+        severity_breakdown: Mapping[str, Any],
+        qa_verdict: str = "MANUAL_REVIEW_REQUIRED",
+        lifecycle_state: str = "manual_review_required",
+    ) -> dict[str, Any]:
+        """Append a renderer-only report revision and make it current.
+
+        This is deliberately narrower than a general mutable-update API:
+        every prior report revision and review decision remains untouched, and
+        the caller supplies unique immutable asset paths before this short
+        transaction begins.  A render refresh changes the active report facts
+        (for example after a graph/template correction), so it atomically
+        reopens the report for review instead of allowing an approval of the
+        old revision to silently apply to the new one.
+        """
+        now = utc_now()
+        with self.transaction() as conn:
+            report = conn.execute(
+                "SELECT * FROM reports WHERE id = ?",
+                (report_id,),
+            ).fetchone()
+            if report is None:
+                raise NotFoundError(f"Report '{report_id}' was not found.")
+            if report["lifecycle_state"] in {"deleted", "deleting", "restoring"}:
+                raise ConflictError("A deleted, deleting, or restoring report cannot be re-rendered.")
+            if report["lifecycle_state"] == "legacy":
+                raise ConflictError(
+                    "Legacy reports are read-only because they do not retain durable source observations."
+                )
+            if report["version"] != expected_report_version or report["current_revision_id"] != expected_current_revision_id:
+                raise ConflictError(
+                    "Report changed while it was being re-rendered; refresh the report and retry."
+                )
+            next_revision = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(revision_number), 0) + 1 FROM report_revisions WHERE report_id = ?",
+                    (report["id"],),
+                ).fetchone()[0]
+            )
+            conn.execute(
+                """
+                INSERT INTO report_revisions (
+                    id, report_id, revision_number, mapping_snapshot_hash, report_json,
+                    narrative_json, markdown_path, json_path, markdown_sha256, json_sha256,
+                    qa_state, created_at, created_by, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    revision_id,
+                    report["id"],
+                    next_revision,
+                    mapping_snapshot_hash,
+                    json_dumps(dict(report_data)),
+                    json_dumps(dict(narrative)),
+                    markdown_path,
+                    json_path,
+                    markdown_sha256,
+                    json_sha256,
+                    lifecycle_state,
+                    now,
+                    created_by,
+                    json_dumps(dict(metadata)),
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE reports
+                SET current_revision_id = ?, finding_count = ?, severity_breakdown_json = ?,
+                    qa_verdict = ?, lifecycle_state = ?, updated_at = ?, version = version + 1
+                WHERE id = ?
+                """,
+                (
+                    revision_id,
+                    max(0, int(finding_count)),
+                    json_dumps(dict(severity_breakdown)),
+                    qa_verdict,
+                    lifecycle_state,
+                    now,
+                    report["id"],
+                ),
+            )
+            updated = conn.execute("SELECT * FROM reports WHERE id = ?", (report["id"],)).fetchone()
+        return self._report_from_row(updated)
+
     def get_report(self, report_id: str, *, include_deleted: bool = True) -> dict[str, Any] | None:
         # ``display_id`` lookup retains compatibility with old bookmarks while
         # UUID remains the canonical API identity.  Display IDs are unique only

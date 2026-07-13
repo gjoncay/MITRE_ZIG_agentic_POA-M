@@ -280,6 +280,76 @@ class RunWorkspace:
             paths["json_path"] = self.relative(target)
         return paths
 
+    def publish_rendered_revision_assets(
+        self,
+        *,
+        report_id: str,
+        revision_id: str,
+        markdown: str,
+        report_json: str,
+    ) -> dict[str, str]:
+        """Publish a renderer-generated revision without touching older assets.
+
+        Initial pipeline output historically lives at
+        ``reports/<report_id>/report.*``.  Re-rendered revisions must never
+        reuse that location: doing so would make an immutable database history
+        point at overwritten bytes.  A UUID-addressed child directory gives
+        every later revision its own markdown/JSON pair and is naturally
+        included by the existing all-revisions deletion manifest.
+        """
+        try:
+            uuid.UUID(str(revision_id))
+        except (ValueError, AttributeError) as exc:
+            raise WorkspaceError("Rendered report revision IDs must be UUIDs.") from exc
+        report_dir = self.reports_dir / report_id / "revisions" / str(revision_id)
+        # A collision must fail closed. ``atomic_write_bytes`` intentionally
+        # replaces a target for normal publication, which would be unsafe if a
+        # caller accidentally reused a revision identifier.
+        if report_dir.exists():
+            raise WorkspaceError("Rendered report revision asset directory already exists.")
+        report_dir.mkdir(parents=True, exist_ok=False)
+        markdown_path = self.atomic_write_bytes(report_dir / "report.md", markdown.encode("utf-8"))
+        json_path = self.atomic_write_bytes(report_dir / "report.json", report_json.encode("utf-8"))
+        return {
+            "markdown_path": self.relative(markdown_path),
+            "json_path": self.relative(json_path),
+        }
+
+    def discard_uncommitted_rendered_revision_assets(
+        self,
+        *,
+        report_id: str,
+        revision_id: str,
+    ) -> None:
+        """Remove only a just-published, not-yet-durable renderer revision.
+
+        This compensation path is used when the SQLite append transaction
+        rejects a concurrent update after unique revision assets were written.
+        It is deliberately constrained to ``reports/<report>/revisions/<uuid>``
+        and never touches an original report asset or any other revision.
+        """
+        try:
+            uuid.UUID(str(revision_id))
+        except (ValueError, AttributeError) as exc:
+            raise WorkspaceError("Rendered report revision IDs must be UUIDs.") from exc
+        candidate = self.reports_dir / str(report_id) / "revisions" / str(revision_id)
+        resolved = candidate.resolve()
+        revisions_root = (self.reports_dir / str(report_id) / "revisions").resolve()
+        try:
+            resolved.relative_to(revisions_root)
+        except ValueError as exc:
+            raise WorkspaceError("Refusing to discard renderer assets outside the revision directory.") from exc
+        if resolved.is_symlink():
+            raise WorkspaceError("Refusing to discard symlinked renderer revision assets.")
+        if resolved.exists():
+            shutil.rmtree(resolved)
+        # Empty intermediate directories are not report artifacts. Leave the
+        # report root itself intact because it may contain revision 1 assets.
+        try:
+            revisions_root.rmdir()
+        except OSError:
+            pass
+
     def plan_report_trash_manifest(
         self,
         *,

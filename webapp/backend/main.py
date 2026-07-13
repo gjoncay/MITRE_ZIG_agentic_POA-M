@@ -44,6 +44,7 @@ from .pipeline_adapter import (
     RunCanceled,
     invoke_pipeline,
     normalize_artifact,
+    rerender_report_from_durable_evidence,
     resolve_pipeline_asset,
 )
 from .validation import ALLOWED_EXTENSIONS, ArtifactValidationError, inspect_artifact, validate_text_artifact
@@ -191,6 +192,10 @@ def _problem_from_exception(exc: Exception) -> ApiProblem:
         return exc
     if isinstance(exc, ArtifactValidationError):
         return ApiProblem(exc.status_code, exc.code, str(exc))
+    if isinstance(exc, NormalizationError):
+        # The renderer uses this for an unavailable/ambiguous retained-evidence
+        # case. It is an actionable conflict, not an internal server error.
+        return ApiProblem(409, "rerender_not_available", str(exc))
     if isinstance(exc, WorkspaceError):
         return ApiProblem(400, "workspace_error", str(exc))
     if isinstance(exc, NotFoundError):
@@ -1408,6 +1413,50 @@ def create_app(
         if not path.is_file():
             raise ApiProblem(404, "report_markdown_not_found", f"Report '{report_id}' markdown was not found.")
         return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/markdown")
+
+    @app.post("/api/reports/{report_id}/rerender")
+    async def rerender_report(report_id: str, request: Request):
+        """Append a current-template/current-graph report revision.
+
+        This route intentionally accepts no body: the actor is always derived
+        from the authenticated principal and the retained report evidence is
+        the only input.  A renderer refresh is not an analysis retry and does
+        not instantiate or call a local/cloud LLM provider.
+        """
+        try:
+            actor = _authorize(app, request, "review")
+            engine = _require_engine(app)
+            result = await asyncio.to_thread(
+                rerender_report_from_durable_evidence,
+                repository=repository,
+                runs_dir=settings.runs_dir,
+                engine=engine,
+                report_id=report_id,
+                actor_id=actor,
+            )
+            updated = result["report"]
+            repository.append_event(
+                updated["run_id"],
+                "report_rerendered",
+                {
+                    "phase": "review",
+                    "message": f"Re-rendered {updated['display_id']} with the current graph and template; manual review is required.",
+                    "current": {"report_id": updated["id"], "revision_id": result["revision_id"], "rerendered_by": actor},
+                    "counters": {"reports_review_pending": 1},
+                    "rerender": {
+                        "source_observation_count": result["source_observation_count"],
+                        "mapping_snapshot_hash": result["mapping_snapshot_hash"],
+                        "provider_calls_made": False,
+                    },
+                },
+            )
+            repository.recompute_run_completion(updated["run_id"])
+            # Keep the client contract simple: it can replace its existing
+            # detail state directly, then retrieve the current Markdown as
+            # usual. Older revision/review records remain separately readable.
+            return report_detail(updated["id"])
+        except Exception as exc:
+            raise _problem_from_exception(exc)
 
     @app.patch("/api/reports/{report_id}/review")
     async def review_report(report_id: str, body: ReviewRequest, request: Request):
