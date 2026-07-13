@@ -1,0 +1,53 @@
+# Strict build-context allowlist.  The final image deliberately receives only
+# the files named below; mutable evidence, credentials, raw source material,
+# local environments, and generated reports never reach the Docker daemon.
+*
+
+!.dockerignore
+!Dockerfile
+!requirements.txt
+!run_analyst_pipeline.py
+!assessment_template_consolidated.md
+
+# Immutable graph snapshot consumed at runtime.
+!mitre_nodes.csv
+!mitre_edges.csv
+!zig_nodes.csv
+!zig_edges.csv
+!cref_nodes.csv
+!cref_edges.csv
+!graph_embeddings.npz
+!embedding_metadata.json
+!graph_snapshot_manifest.json
+
+# Runtime pipeline modules.
+!scripts/
+!scripts/**
+
+# Frontend build inputs only.  Do not re-include node_modules or dist.
+!webapp/
+!webapp/frontend/
+!webapp/frontend/package.json
+!webapp/frontend/package-lock.json
+!webapp/frontend/index.html
+!webapp/frontend/postcss.config.js
+!webapp/frontend/tailwind.config.js
+!webapp/frontend/tsconfig.json
+!webapp/frontend/tsconfig.node.json
+!webapp/frontend/vite.config.ts
+!webapp/frontend/src/
+!webapp/frontend/src/**
+
+# Backend runtime modules only.  Per-run uploads, tests, caches, and dev
+# dependencies are intentionally excluded.
+!webapp/backend/
+!webapp/backend/main.py
+!webapp/backend/auth.py
+!webapp/backend/db.py
+!webapp/backend/legacy_import.py
+!webapp/backend/maintenance.py
+!webapp/backend/pipeline_adapter.py
+!webapp/backend/pdf_export.py
+!webapp/backend/validation.py
+!webapp/backend/workspace.py
+!webapp/backend/requirements.txt

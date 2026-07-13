@@ -76,17 +76,22 @@ When MITRE releases new data, drop the updated raw files in the repo root and ru
 
 ```bash
 python3 consolidate_mitre_data.py
+python3 scripts/parse_zig_data.py     # only if the ZIG source text changed; run before CREF reconciliation
 python3 consolidate_cref_data.py        # only if CREF/*.csv also changed; run AFTER consolidate_mitre_data.py
 python3 scripts/embed_graph.py          # only if using semantic mode
 python3 build_deployment_guide.py       # keep the deployment guide in sync
 python3 build_cref_extension_guide.py   # keep the CREF extension guide in sync
+python3 build_pipeline_addendum_guide.py # keep the analyst-pipeline addendum in sync
 python3 build_portable_bundle.py        # keep the CDS-transfer bundle in sync
 ```
 
 ## Multi-Provider Analyst Pipeline
 
 `run_analyst_pipeline.py` consolidates `processed_assessment.csv` findings by
-ATT&CK technique (one report per technique, covering every affected host) and
+ATT&CK technique (one report per technique, covering every affected host). A single
+finding or threat-intelligence artifact can produce multiple reports when it contains
+multiple explicit ATT&CK IDs or canonical ATT&CK technique names; each report's JSON
+preserves every direct graph-backed ZIG, CREF, NIST, and CSA relationship. It then
 drafts/proofreads/QA-reviews each report via a pluggable LLM provider, chosen
 with the `LLM_PROVIDER` env var (or `--provider`):
 
@@ -112,8 +117,17 @@ if any don't resolve to a real node.
 ## Web UI (Tailscale)
 
 A web UI (React frontend + FastAPI backend, PDF export via weasyprint) wraps
-the graph engine and analyst pipeline. Once deployed on the owner's laptop it
-is reachable tailnet-only at:
+the graph engine and analyst pipeline. It stores each submitted artifact,
+normalized observation, and report revision below `data/runs/<run UUID>/`, with
+SQLite/WAL lifecycle and audit records at `data/csdh.sqlite3`, not in the legacy
+repository-level `reports/` or upload directories. The review queue and
+run-progress pages are therefore durable across service restarts.
+
+The application container is non-root and read-only except for the private
+`./data` bind mount. Create that directory with mode `0700`, set `APP_UID` and
+`APP_GID` in `.env` to its Linux owner, and treat it as sensitive evidence that
+must be backed up. Once deployed on the owner's laptop, the UI is reachable
+tailnet-only at:
 
 ```
 https://mitre-csdh.dikdik-macaroni.ts.net
@@ -122,12 +136,28 @@ https://mitre-csdh.dikdik-macaroni.ts.net
 Bring it up with:
 
 ```bash
-cp .env.example .env          # then paste TS_AUTHKEY (see TAILSCALE_SIDECAR.md)
-# optionally set LLM_PROVIDER + OPENAI_API_KEY / GEMINI_API_KEY / LOCAL_LLM_BASE_URL
-docker compose up -d
+mkdir -p data && chmod 700 data
+cp .env.example .env          # set TS_AUTHKEY, APP_UID/APP_GID, and a production auth token map; chmod 600 .env
+docker compose config --quiet
+docker compose up -d --build
 ```
 
-Full sidecar recipe/gotchas: `TAILSCALE_SIDECAR.md`.
+`LLM_PROVIDER=none` is the default. `local` points to an OpenAI-compatible
+local endpoint; `openai` and `gemini` require a per-submission cloud-egress
+acknowledgement because supplied evidence is sent to that provider. The model
+can use a bounded, read-only graph-tool crawl; deterministic validated graph
+paths remain the mapping authority. The progress screen records every graph
+planner request and graph-tool action; an interrupted service shutdown safely
+requeues work for clean replay from the retained source artifact on restart.
+
+Production web access also requires either `CSDH_AUTH_MODE=token` with a
+nonempty `CSDH_AUTH_TOKENS_JSON` map, or a correctly configured authenticated
+reverse proxy in `trusted_proxy` mode. The server derives reviewer/deletion
+actors from that identity; `disabled` is only for explicit local development.
+
+Use [WEB_DEPLOYMENT_OPERATIONS.md](WEB_DEPLOYMENT_OPERATIONS.md) for the full
+first-start, UID/GID, backup/restore, retention, image-pinning, and incident
+procedures. `TAILSCALE_SIDECAR.md` remains the sidecar-specific recipe/gotchas.
 
 **This entire web UI / Docker / Tailscale layer is NOT part of the air-gapped
 port.** `Air_Gapped_Deployment_Guide.md`, `CREF_ZERO_TRUST_EXTENSION_GUIDE.md`,

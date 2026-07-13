@@ -1,0 +1,3 @@
+# Backend API/lifecycle test dependencies (not required in the runtime image).
+pytest>=8.0
+httpx>=0.28

@@ -45,7 +45,8 @@ def count_csv(path):
 
 def graph_counts():
     import networkx as nx
-    g = nx.DiGraph()
+    # Count every retained source relationship, including parallel edges.
+    g = nx.MultiDiGraph()
     for nodes_file, edges_file in [("mitre_nodes.csv", "mitre_edges.csv"),
                                    ("zig_nodes.csv", "zig_edges.csv"),
                                    ("cref_nodes.csv", "cref_edges.csv")]:

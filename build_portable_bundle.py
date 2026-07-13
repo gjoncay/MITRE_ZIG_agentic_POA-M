@@ -29,9 +29,15 @@ EMBEDDED_FILES = [
     ("scripts/graph_engine.py", "python"),
     ("scripts/embed_graph.py", "python"),
     ("scripts/ingest_assessment.py", "python"),
+    ("scripts/llm_graph_tools.py", "python"),
+    ("scripts/llm_providers.py", "python"),
+    ("scripts/consolidate_findings.py", "python"),
+    ("scripts/report_schema.py", "python"),
     ("agent_batch_processor.py", "python"),
     ("agent_crawl_example.py", "python"),
     ("assessment_template.md", "markdown"),
+    ("assessment_template_consolidated.md", "markdown"),
+    ("run_analyst_pipeline.py", "python"),
     ("threat_assessment_skill.md", "markdown"),
     ("consolidate_mitre_data.py", "python"),
     ("scripts/parse_zig_data.py", "python"),
@@ -39,6 +45,7 @@ EMBEDDED_FILES = [
     ("import_to_neo4j.py", "python"),
     ("build_deployment_guide.py", "python"),
     ("build_cref_extension_guide.py", "python"),
+    ("build_pipeline_addendum_guide.py", "python"),
     ("README.md", "markdown"),
 ]
 
@@ -192,7 +199,7 @@ not treat the `[Warning] Semantic search unavailable...` message as an error.
 python3 scripts/graph_engine.py
 ```
 
-Must print `Knowledge Graph initialized with ~5618 nodes and ~43194 edges`
+Must print `Knowledge Graph initialized with ~5618 nodes and ~43387 edges`
 (small drift is fine if the CSVs were regenerated from newer MITRE/CREF data; a
 number near 0 means the CSVs are not in the project root), then successful
 lookups of `ZIG-PIL-1` and `T1548`, then search results for a test query.

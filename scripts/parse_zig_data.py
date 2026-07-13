@@ -1,6 +1,27 @@
-import re
+"""Regenerate deterministic ZIG graph inputs from ``raw_data/zig``.
+
+This parser is intentionally repository-relative: invoke it from the project
+root, another shell directory, or automation without changing where the
+outputs land.  It keeps every distinct technology-to-capability relationship;
+exact triples repeated by a denormalized source export are normalized
+deterministically without collapsing a different relationship type.
+"""
+
+from __future__ import annotations
+
+import argparse
 import csv
 import os
+import re
+import tempfile
+from pathlib import Path
+from typing import Iterable
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+RAW_ZIG_DIR = BASE_DIR / "raw_data" / "zig"
+NODE_FIELDS = ("id", "type", "name", "description", "url")
+EDGE_FIELDS = ("source_id", "target_id", "relationship_type")
 
 PILLARS = {
     1: "User",
@@ -9,170 +30,255 @@ PILLARS = {
     4: "Data",
     5: "Network and Environment",
     6: "Automation and Orchestration",
-    7: "Visibility and Analytics"
+    7: "Visibility and Analytics",
 }
 
-def parse_zig_text_files(files):
-    capabilities = {}
-    activities = {}
 
-    cap_pattern = re.compile(r'^Capability\s+(\d+\.\d+)\s+(.*?)(?:\s*\.*(?: \.*)*\s*\d+)?$')
-    act_pattern = re.compile(r'^Activity\s+(\d+\.\d+\.\d+)\s+(.*?)(?:\s*\.*(?: \.*)*\s*\d+)?$')
+def _numeric_key(identifier: str) -> tuple[object, ...]:
+    """Sort dotted IDs numerically while retaining a stable textual fallback."""
+    parts: list[object] = []
+    for part in str(identifier).split("."):
+        parts.append(int(part) if part.isdigit() else part)
+    return tuple(parts)
 
-    for fpath in files:
-        if not os.path.exists(fpath):
+
+def _stage_csv(path: Path, fieldnames: Iterable[str], rows: Iterable[dict[str, str]]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(fieldnames), extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return temporary
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _replace_staged(staged: list[tuple[Path, Path]]) -> None:
+    try:
+        for target, temporary in staged:
+            os.replace(temporary, target)
+    finally:
+        for _, temporary in staged:
+            temporary.unlink(missing_ok=True)
+
+
+def _logical_edges(edges: Iterable[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
+    """Stable-deduplicate exact logical triples without using an edge set."""
+    unique: dict[tuple[str, str, str], dict[str, str]] = {}
+    repeated = 0
+    for edge in edges:
+        key = (edge["source_id"], edge["target_id"], edge["relationship_type"])
+        if key in unique:
+            repeated += 1
+        else:
+            unique[key] = edge
+    return list(unique.values()), repeated
+
+
+def parse_zig_text_files(files: Iterable[Path]) -> tuple[dict[str, str], dict[str, str]]:
+    capabilities: dict[str, str] = {}
+    activities: dict[str, str] = {}
+    cap_pattern = re.compile(r"^Capability\s+(\d+\.\d+)\s+(.*?)(?:\s*\.*(?: \.*)*\s*\d+)?$")
+    act_pattern = re.compile(r"^Activity\s+(\d+\.\d+\.\d+)\s+(.*?)(?:\s*\.*(?: \.*)*\s*\d+)?$")
+
+    for path in files:
+        if not path.is_file():
+            print(f"Warning: ZIG source text is missing and will be skipped: {path}")
             continue
-        with open(fpath, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                
-                # Check for Capability
-                c_match = cap_pattern.search(line)
-                if c_match:
-                    c_id = c_match.group(1)
-                    c_name = c_match.group(2).strip()
-                    # Strip trailing dots and page numbers if any
-                    c_name = re.sub(r'\s*\.{2,}\s*\d*$', '', c_name).strip()
-                    if c_id not in capabilities or len(c_name) > len(capabilities[c_id]): 
-                        capabilities[c_id] = c_name
-                
-                # Check for Activity
-                a_match = act_pattern.search(line)
-                if a_match:
-                    a_id = a_match.group(1)
-                    a_name = a_match.group(2).strip()
-                    a_name = re.sub(r'\s*\.{2,}\s*\d*$', '', a_name).strip()
-                    if a_id not in activities or len(a_name) > len(activities[a_id]):
-                        activities[a_id] = a_name
+        with path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                capability_match = cap_pattern.search(line)
+                if capability_match:
+                    capability_id = capability_match.group(1)
+                    capability_name = re.sub(r"\s*\.{2,}\s*\d*$", "", capability_match.group(2)).strip()
+                    if capability_name and (
+                        capability_id not in capabilities
+                        or len(capability_name) > len(capabilities[capability_id])
+                    ):
+                        capabilities[capability_id] = capability_name
 
+                activity_match = act_pattern.search(line)
+                if activity_match:
+                    activity_id = activity_match.group(1)
+                    activity_name = re.sub(r"\s*\.{2,}\s*\d*$", "", activity_match.group(2)).strip()
+                    if activity_name and (
+                        activity_id not in activities
+                        or len(activity_name) > len(activities[activity_id])
+                    ):
+                        activities[activity_id] = activity_name
     return capabilities, activities
 
-def parse_tech_mappings(fpath):
-    mappings = []
-    technologies = {}
-    tech_id_counter = 1
-    
-    with open(fpath, 'r', encoding='utf-8') as f:
-        lines = f.read().strip().split('\n')
-        
-    i = 0
-    while i < len(lines):
-        tech_name = lines[i].strip()
-        if not tech_name:
-            i += 1
+
+def parse_tech_mappings(path: Path) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """Parse the three-line technology/capability blocks without deduplicating mappings."""
+    with path.open("r", encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+
+    technologies: dict[str, str] = {}
+    mappings: list[tuple[str, str]] = []
+    technology_counter = 1
+    index = 0
+    while index < len(lines):
+        technology_name = lines[index].strip()
+        if not technology_name:
+            index += 1
             continue
-        if i + 1 >= len(lines):
+        if index + 1 >= len(lines):
             break
-            
-        caps_line = lines[i+1].strip()
-        count_line = lines[i+2].strip() if i + 2 < len(lines) else ""
-        
-        # Extract capabilities like 4.4P45.1P5 -> 4.4, 5.1
-        caps = re.findall(r'(\d+\.\d+)P\d', caps_line)
-        
-        tech_id = f"ZIG-TECH-{tech_id_counter}"
-        technologies[tech_id] = tech_name
-        tech_id_counter += 1
-        
-        for cap in caps:
-            mappings.append((tech_id, cap))
-            
-        i += 3
-        
+        capability_line = lines[index + 1].strip()
+        technology_id = f"ZIG-TECH-{technology_counter}"
+        technologies[technology_id] = technology_name
+        technology_counter += 1
+        # Examples are packed as ``4.4P4 5.1P5`` or ``4.4P45.1P5``.
+        for capability_id in re.findall(r"(\d+\.\d+)P\d", capability_line):
+            mappings.append((technology_id, capability_id))
+        index += 3
     return technologies, mappings
 
-def generate_csvs(capabilities, activities, technologies, tech_mappings):
-    nodes = []
-    edges = []
-    
-    # Add Pillars
-    for p_id, p_name in PILLARS.items():
-        node_id = f"ZIG-PIL-{p_id}"
-        nodes.append({
-            "id": node_id,
-            "type": "zig_pillar",
-            "name": f"{p_name} Pillar",
-            "description": f"ZIG {p_name} Pillar",
-            "url": ""
-        })
-        
-    # Add Capabilities
-    for c_id, c_name in capabilities.items():
-        node_id = f"ZIG-CAP-{c_id}"
-        nodes.append({
-            "id": node_id,
-            "type": "zig_capability",
-            "name": c_name,
-            "description": f"ZIG Capability {c_id}",
-            "url": ""
-        })
-        p_id = c_id.split('.')[0]
-        edges.append({
-            "source_id": node_id,
-            "target_id": f"ZIG-PIL-{p_id}",
-            "relationship_type": "belongs_to_pillar"
-        })
-        
-    # Add Activities
-    for a_id, a_name in activities.items():
-        node_id = f"ZIG-ACT-{a_id}"
-        nodes.append({
-            "id": node_id,
-            "type": "zig_activity",
-            "name": a_name,
-            "description": f"ZIG Activity {a_id}",
-            "url": ""
-        })
-        c_id = ".".join(a_id.split('.')[:2])
-        edges.append({
-            "source_id": node_id,
-            "target_id": f"ZIG-CAP-{c_id}",
-            "relationship_type": "belongs_to_capability"
-        })
-        
-    # Add Technologies
-    for t_id, t_name in technologies.items():
-        nodes.append({
-            "id": t_id,
-            "type": "zig_technology",
-            "name": t_name,
-            "description": f"ZIG Technology Mapping",
-            "url": ""
-        })
-        
-    # Add Tech Mappings
-    for t_id, c_id in tech_mappings:
-        # Note: some capabilities might not be parsed if they aren't in the PDFs 
-        # but are in the tech mappings (e.g. Discovery phase might have missed some).
-        # We will create edges regardless.
-        edges.append({
-            "source_id": t_id,
-            "target_id": f"ZIG-CAP-{c_id}",
-            "relationship_type": "implements_capability"
-        })
-        
-    # Write nodes.csv
-    with open('zig_nodes.csv', 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=["id", "type", "name", "description", "url"])
-        writer.writeheader()
-        writer.writerows(nodes)
-        
-    # Write edges.csv
-    with open('zig_edges.csv', 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=["source_id", "target_id", "relationship_type"])
-        writer.writeheader()
-        writer.writerows(edges)
-        
-if __name__ == "__main__":
-    txt_files = [
-        "CTR_ZIG_DISCOVERY_PHASE.PDF.txt",
-        "CTR_ZIG_PHASE_ONE.PDF.txt",
-        "CTR_ZIG_PHASE_TWO.PDF.txt"
+
+def generate_records(
+    capabilities: dict[str, str],
+    activities: dict[str, str],
+    technologies: dict[str, str],
+    technology_mappings: list[tuple[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Materialize valid graph records in deterministic order.
+
+    The source mapping list is not converted to a set.  Exact logical triples
+    are normalized only after all derived rows have been collected, leaving
+    distinct relationship types between the same node pair intact.
+    """
+    capabilities = dict(capabilities)
+    referenced_capabilities = {capability_id for _, capability_id in technology_mappings}
+    referenced_capabilities.update(".".join(activity_id.split(".")[:2]) for activity_id in activities)
+    for capability_id in sorted(referenced_capabilities, key=_numeric_key):
+        # Preserve the raw mapping while ensuring no edge points at a phantom
+        # node.  CREF reconciliation can replace these conservative labels.
+        capabilities.setdefault(capability_id, f"ZIG Capability {capability_id} (source mapping)")
+
+    nodes: list[dict[str, str]] = []
+    edges: list[dict[str, str]] = []
+    for pillar_id, pillar_name in sorted(PILLARS.items()):
+        nodes.append(
+            {
+                "id": f"ZIG-PIL-{pillar_id}",
+                "type": "zig_pillar",
+                "name": f"{pillar_name} Pillar",
+                "description": f"ZIG {pillar_name} Pillar",
+                "url": "",
+            }
+        )
+    for capability_id in sorted(capabilities, key=_numeric_key):
+        node_id = f"ZIG-CAP-{capability_id}"
+        nodes.append(
+            {
+                "id": node_id,
+                "type": "zig_capability",
+                "name": capabilities[capability_id],
+                "description": f"ZIG Capability {capability_id}",
+                "url": "",
+            }
+        )
+        pillar_id = capability_id.split(".", 1)[0]
+        if pillar_id.isdigit() and int(pillar_id) in PILLARS:
+            edges.append(
+                {
+                    "source_id": node_id,
+                    "target_id": f"ZIG-PIL-{pillar_id}",
+                    "relationship_type": "belongs_to_pillar",
+                }
+            )
+    for activity_id in sorted(activities, key=_numeric_key):
+        node_id = f"ZIG-ACT-{activity_id}"
+        nodes.append(
+            {
+                "id": node_id,
+                "type": "zig_activity",
+                "name": activities[activity_id],
+                "description": f"ZIG Activity {activity_id}",
+                "url": "",
+            }
+        )
+        capability_id = ".".join(activity_id.split(".")[:2])
+        edges.append(
+            {
+                "source_id": node_id,
+                "target_id": f"ZIG-CAP-{capability_id}",
+                "relationship_type": "belongs_to_capability",
+            }
+        )
+    for technology_id in sorted(technologies, key=lambda value: int(value.rsplit("-", 1)[1])):
+        nodes.append(
+            {
+                "id": technology_id,
+                "type": "zig_technology",
+                "name": technologies[technology_id],
+                "description": "ZIG Technology Mapping",
+                "url": "",
+            }
+        )
+    for technology_id, capability_id in technology_mappings:
+        edges.append(
+            {
+                "source_id": technology_id,
+                "target_id": f"ZIG-CAP-{capability_id}",
+                "relationship_type": "implements_capability",
+            }
+        )
+
+    logical_edges, _ = _logical_edges(edges)
+    return sorted(nodes, key=lambda node: node["id"]), sorted(
+        logical_edges,
+        key=lambda edge: (edge["source_id"], edge["target_id"], edge["relationship_type"]),
+    )
+
+
+def generate_csvs(
+    capabilities: dict[str, str],
+    activities: dict[str, str],
+    technologies: dict[str, str],
+    technology_mappings: list[tuple[str, str]],
+    *,
+    output_dir: Path = BASE_DIR,
+) -> tuple[int, int]:
+    nodes, edges = generate_records(capabilities, activities, technologies, technology_mappings)
+    staged = [
+        (output_dir / "zig_nodes.csv", _stage_csv(output_dir / "zig_nodes.csv", NODE_FIELDS, nodes)),
+        (output_dir / "zig_edges.csv", _stage_csv(output_dir / "zig_edges.csv", EDGE_FIELDS, edges)),
     ]
-    caps, acts = parse_zig_text_files(txt_files)
-    techs, mappings = parse_tech_mappings("zig_tech_mappings.txt")
-    
-    generate_csvs(caps, acts, techs, mappings)
-    print(f"Parsed {len(caps)} capabilities and {len(acts)} activities.")
-    print(f"Parsed {len(techs)} technologies with {len(mappings)} mappings.")
-    print("Generated zig_nodes.csv and zig_edges.csv.")
+    _replace_staged(staged)
+    return len(nodes), len(edges)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Regenerate ZIG graph CSVs from raw_data/zig.")
+    parser.add_argument("--base-dir", type=Path, default=BASE_DIR, help="Repository root.")
+    args = parser.parse_args()
+    base_dir = args.base_dir.resolve()
+    raw_dir = base_dir / "raw_data" / "zig"
+    text_files = [
+        raw_dir / "CTR_ZIG_DISCOVERY_PHASE.PDF.txt",
+        raw_dir / "CTR_ZIG_PHASE_ONE.PDF.txt",
+        raw_dir / "CTR_ZIG_PHASE_TWO.PDF.txt",
+    ]
+    capabilities, activities = parse_zig_text_files(text_files)
+    technologies, mappings = parse_tech_mappings(raw_dir / "zig_tech_mappings.txt")
+    node_count, edge_count = generate_csvs(
+        capabilities, activities, technologies, mappings, output_dir=base_dir
+    )
+    print(f"Parsed {len(capabilities)} capabilities and {len(activities)} activities.")
+    print(f"Parsed {len(technologies)} technologies with {len(mappings)} mapping rows.")
+    print(f"Generated {node_count} nodes and {edge_count} edge rows in {base_dir}.")
+
+
+if __name__ == "__main__":
+    main()

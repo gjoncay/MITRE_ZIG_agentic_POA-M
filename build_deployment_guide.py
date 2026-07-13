@@ -43,7 +43,10 @@ def count_csv(path):
 def graph_counts():
     """Deduplicated counts as the engine will actually report them."""
     import networkx as nx
-    g = nx.DiGraph()
+    # The runtime preserves parallel relations and provenance, so count the
+    # same graph shape it materializes rather than collapsing same-endpoint
+    # rows in a simple DiGraph.
+    g = nx.MultiDiGraph()
     for nodes_file, edges_file in [("mitre_nodes.csv", "mitre_edges.csv"),
                                    ("zig_nodes.csv", "zig_edges.csv"),
                                    ("cref_nodes.csv", "cref_edges.csv")]:
@@ -115,7 +118,8 @@ GUIDE_TEMPLATE = '''# Air-Gapped Deployment Guide & Agent Reconstruction Plan
 Three cooperating pieces, all plain Python:
 
 1. **Knowledge Graph Engine** (`scripts/graph_engine.py`) — loads six CSVs into a
-   NetworkX directed graph ({total_nodes} nodes, {total_edges} edges) unifying
+   NetworkX provenance-preserving multi-directed graph ({total_nodes} nodes,
+   {total_edges} edges) unifying
    MITRE ATT&CK, MITRE D3FEND, the NSA Zero Trust Implementation Guide (ZIG), and
    NIST SP 800-160 Vol. 2 Cyber Resiliency (CREF) — the last of which also carries
    the DoD Zero Trust Strategy activity-level crosswalk, NIST SP 800-53 control
@@ -207,26 +211,28 @@ pip install numpy scikit-learn sentence-transformers   # Tier 3 — OPTIONAL sem
 Skip this section entirely if Tier 3 libraries are unavailable. The system is
 fully functional in keyword-fallback mode.
 
-**5.1 Port the embedding model.** `SentenceTransformer('all-MiniLM-L6-v2')`
-normally downloads from the internet, which will fail here. Copy the cached
-model directory from the low side:
+**5.1 Port the embedding model.** Runtime graph loading is deliberately
+local-only: it calls `SentenceTransformer(..., local_files_only=True)` and
+falls back to typed lexical search if the model or a compatible index is absent.
+It will not download a model. To use semantic retrieval, copy the cached model
+directory from the low side:
 
 ```text
 LOW SIDE:  ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/   (~90 MB)
 HIGH SIDE: same path under the service account's home directory
 ```
 
-Then force offline resolution so the library never attempts a network call:
+Keep the standard HuggingFace offline guards enabled as a second deployment
+control:
 
 ```bash
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 ```
 
-(Alternative: place the model folder anywhere and change every
-`SentenceTransformer('all-MiniLM-L6-v2')` call to
-`SentenceTransformer('/absolute/path/to/model-dir')` — it appears once each in
-`graph_engine.py`, `embed_graph.py`, and `ingest_assessment.py`.)
+(The index-building command in 5.2 may intentionally download on a connected
+build machine. Do not run it on the air-gapped runtime host unless the model is
+already locally available.)
 
 **5.2 Generate graph embeddings** (once, and again whenever the CSVs change).
 If `graph_embeddings.npz` + `embedding_metadata.json` were ported, you may skip
@@ -237,8 +243,9 @@ because the vector row order must match the node list.
 python3 scripts/embed_graph.py
 ```
 
-Expected: a progress bar, then
-`Successfully saved embeddings to .../graph_embeddings.npz ...`.
+Expected: a progress bar, then a message confirming that the index and its
+snapshot-bound metadata were saved. The runtime rejects an index from a
+different graph snapshot instead of searching it.
 
 ---
 
@@ -466,7 +473,7 @@ query) must come from the SAME model — never mix local and API embeddings.
 |---|---|---|
 | `Knowledge Graph initialized with 0 nodes` | CSVs missing from the repo root (the engine resolves them relative to its own file, so cwd is not the issue) | Put the four CSVs next to `scripts/`' parent, i.e. the repo root |
 | `[Warning] Semantic search unavailable...` | Tier 3 libs or embedding files absent | Expected in keyword-fallback mode; ignore, or complete Section 5 |
-| `SentenceTransformer` tries to download / times out | Model cache not ported or offline env vars unset | Section 5.1 |
+| Semantic retrieval is unavailable / falls back to lexical search | Model cache, compatible vector index, or optional ML dependencies are absent | Expected safe fallback; complete Section 5 only when semantic retrieval is required. Runtime does not download models. |
 | Search results are all `AN` analytics | You forgot to filter for `T`-prefixed IDs (workflow step 2) | Filter results |
 | `KeyError` in `agent_batch_processor.py` template fill | `assessment_template.md` placeholders don't match — you edited one file but not the other | Diff the `template.format(...)` kwargs against the `{{PLACEHOLDER}}` names |
 | Embedding search returns nonsense after CSV regeneration | Stale `graph_embeddings.npz` (row order no longer matches nodes) | Re-run `scripts/embed_graph.py` |

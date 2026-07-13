@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Provider } from "../types";
-import { analyze } from "../api/client";
+import { createRun, getSubmissionPolicy } from "../api/client";
 
 interface InputViewProps {
   onJobStarted: (jobId: string) => void;
@@ -14,19 +14,32 @@ const PROVIDER_OPTIONS: { value: Provider; label: string }[] = [
   { value: "none", label: "Heuristic (no LLM)" },
 ];
 
-const ACCEPTED_EXTENSIONS = [".xlsx", ".csv"];
+const ACCEPTED_EXTENSIONS = [".xlsx", ".xls", ".csv", ".json", ".txt", ".md"];
 
-/** Input view: paste freeform threat-intel text OR upload an .xlsx/.csv file, pick a provider, analyze. */
+/** A run may contain many artifacts/observations and each observation may resolve to
+ * more than one ATT&CK technique. File-type validation remains authoritative on the backend. */
 export default function InputView({ onJobStarted }: InputViewProps) {
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [provider, setProvider] = useState<Provider>("");
+  const [cloudAcknowledged, setCloudAcknowledged] = useState(false);
+  const [serverDefaultRequiresCloudAck, setServerDefaultRequiresCloudAck] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const canSubmit = (text.trim().length > 0 || file !== null) && !submitting;
+  const usesCloudProvider = provider === "openai" || provider === "gemini";
+  const requiresCloudAck = usesCloudProvider || (provider === "" && serverDefaultRequiresCloudAck);
+  const canSubmit = (text.trim().length > 0 || file !== null) && !submitting && (!requiresCloudAck || cloudAcknowledged);
+
+  useEffect(() => {
+    let canceled = false;
+    void getSubmissionPolicy()
+      .then((policy) => { if (!canceled) setServerDefaultRequiresCloudAck(policy.cloudAcknowledgementRequired); })
+      .catch(() => { /* The submit endpoint remains the policy authority. */ });
+    return () => { canceled = true; };
+  }, []);
 
   function handleFileChange(f: File | null) {
     setFile(f);
@@ -45,12 +58,13 @@ export default function InputView({ onJobStarted }: InputViewProps) {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await analyze({
+      const run = await createRun({
         text: file ? undefined : text.trim() || undefined,
         file: file ?? undefined,
         provider: provider || undefined,
+        cloudAcknowledged,
       });
-      onJobStarted(res.job_id);
+      onJobStarted(run.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to start analysis.");
       setSubmitting(false);
@@ -64,7 +78,7 @@ export default function InputView({ onJobStarted }: InputViewProps) {
           New Threat Assessment
         </h1>
         <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-          Paste freeform threat-intel text, or upload a vulnerability assessment spreadsheet.
+          Paste a finding or threat-intel artifact, or upload a CSV/XLSX vulnerability or assessment export, text/Markdown, or STIX-compatible JSON.
         </p>
       </div>
 
@@ -101,7 +115,7 @@ export default function InputView({ onJobStarted }: InputViewProps) {
         className="rounded-lg border p-4"
         style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-default)" }}
       >
-        <label className="data-label mb-2 block">Upload assessment file (.xlsx / .csv)</label>
+        <label className="data-label mb-2 block">Upload a supported artifact</label>
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -162,7 +176,11 @@ export default function InputView({ onJobStarted }: InputViewProps) {
           <select
             id="provider-select"
             value={provider}
-            onChange={(e) => setProvider(e.target.value as Provider)}
+            onChange={(e) => {
+              const next = e.target.value as Provider;
+              setProvider(next);
+              if (next !== "openai" && next !== "gemini") setCloudAcknowledged(false);
+            }}
             className="rounded-md border px-3 py-1.5 text-sm outline-none"
             style={{
               backgroundColor: "var(--bg-surface)",
@@ -177,6 +195,15 @@ export default function InputView({ onJobStarted }: InputViewProps) {
             ))}
           </select>
         </div>
+
+        {requiresCloudAck ? (
+          <label className="flex max-w-xl items-start gap-2 rounded-md border px-3 py-2 text-xs" style={{ borderColor: "var(--accent-warning)", backgroundColor: "var(--accent-warning-glow)", color: "var(--text-primary)" }}>
+            <input type="checkbox" checked={cloudAcknowledged} onChange={(event) => setCloudAcknowledged(event.target.checked)} className="mt-0.5" />
+            <span>{usesCloudProvider
+              ? "I understand that the submitted artifact text and bounded graph context will be sent to the selected cloud LLM provider for narrative/QA and optional graph-tool planning."
+              : "I understand that the server default is configured for cloud LLM use, so the submitted artifact text and bounded graph context may be sent for narrative/QA and optional graph-tool planning."}</span>
+          </label>
+        ) : null}
 
         <button
           type="button"

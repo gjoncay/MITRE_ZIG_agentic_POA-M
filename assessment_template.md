@@ -33,7 +33,7 @@
 
 ### D3FEND Countermeasures
 *The defensive mechanisms and artifacts required to detect, isolate, or mitigate the threat based on the D3FEND matrix.*
-- **Countermeasure(s):** 
+- **Countermeasure(s):**
   - {D3FEND_COUNTERMEASURE_1}
   - {D3FEND_COUNTERMEASURE_2}
 - **Target Artifact(s):** {D3FEND_ARTIFACTS}
@@ -47,7 +47,7 @@
 ### ZIG Pillar & Capabilities
 - **Primary ZIG Pillar:** {ZIG_PILLAR_NAME}
 - **Associated Capability:** {ZIG_CAPABILITY_ID} - {ZIG_CAPABILITY_NAME}
-- **Relevant Activities:** 
+- **Relevant Activities:**
   - {ZIG_ACTIVITY_1}
 
 ---

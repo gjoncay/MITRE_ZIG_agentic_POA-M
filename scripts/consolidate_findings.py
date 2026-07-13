@@ -22,7 +22,9 @@ from graph_engine import KnowledgeGraphEngine
 # Matches a literal ATT&CK technique ID mentioned anywhere in a row's text, e.g.
 # "T1566" or "T1078.004". Word boundaries keep this from matching inside a
 # longer alphanumeric token.
-TECHNIQUE_ID_RE = re.compile(r'\bT\d{4}(?:\.\d{3})?\b')
+TECHNIQUE_ID_RE = re.compile(r'\bT\d{4}(?:\.\d{3})?\b', re.IGNORECASE)
+SEMANTIC_MIN_SCORE = float(os.environ.get("CSDH_SEMANTIC_MIN_SCORE", "0.28"))
+SEMANTIC_MIN_MARGIN = float(os.environ.get("CSDH_SEMANTIC_MIN_MARGIN", "0.05"))
 
 
 def first_present(row, candidates, default="Unknown"):
@@ -48,7 +50,10 @@ def compose_finding_text(row, candidates):
         return named
     parts = [
         f"{col}: {str(val).strip()}" for col, val in row.items()
-        if pd.notna(val) and str(val).strip() and str(val).strip().lower() != 'nan'
+        # Run/sheet provenance is retained in underscore-prefixed columns but
+        # is not behavior evidence.  Searching it can map every row in a sheet
+        # because one technique happened to appear in an administrative title.
+        if not str(col).startswith('_') and pd.notna(val) and str(val).strip() and str(val).strip().lower() != 'nan'
     ]
     return " | ".join(parts) if parts else "Unknown"
 
@@ -62,13 +67,33 @@ def extract_direct_technique_ids(engine, text):
     """
     seen = []
     for match in TECHNIQUE_ID_RE.finditer(text or ""):
-        candidate = match.group(0)
+        # ATT&CK IDs are canonical uppercase in the graph, but CTI feeds
+        # routinely serialize them as lowercase/mixed case. Normalize only
+        # the identifier, not surrounding evidence text.
+        candidate = match.group(0).upper()
         if candidate in seen:
             continue
         node = engine.query_node(candidate)
         if node and node.get('type') == 'attack_technique':
             seen.append(candidate)
     return seen
+
+
+def extract_named_techniques(engine, text):
+    """Return real ATT&CK techniques whose complete canonical name appears in text.
+
+    This is deliberately an exact phrase match, not another fuzzy/LLM inference:
+    it allows a CTI artifact such as "used Phishing, Valid Accounts, and Remote
+    Services" to yield all three graph-backed TTPs without minting an ID. Literal
+    IDs remain authoritative; this is the deterministic next-best evidence when
+    an artifact names ATT&CK behaviors but omits their IDs.
+    """
+    # graph_engine maintains a longest/specific-first exact-name index with
+    # real Unicode word boundaries and parent/sub-technique suppression.  The
+    # old inline regex used ``\\w`` (a literal slash+w) and could match a name
+    # inside a larger word; scanning every graph node per observation was also
+    # needlessly expensive.
+    return engine.match_attack_technique_names(text)
 
 
 def resolve_technique(engine, finding_text):
@@ -78,34 +103,57 @@ def resolve_technique(engine, finding_text):
     search hit whose node id looks like a technique id ('T' followed by a
     digit). Returns (node_id, node_data, score) or None.
     """
-    mitre_results = engine.semantic_search(finding_text, top_k=20)
-    for nid, ndata, score in mitre_results:
-        if nid.startswith('T') and len(nid) > 1 and nid[1].isdigit():
-            return (nid, ndata, score)
-    return None
+    # semantic_search is typed to attack_technique by default.  Do not rank
+    # every graph node and then use a first matching T-prefixed result.
+    mitre_results = engine.semantic_search(
+        finding_text, top_k=2, node_type='attack_technique'
+    )
+    if not mitre_results:
+        return None
+    best = mitre_results[0]
+    best_score = float(best[2])
+    second_score = float(mitre_results[1][2]) if len(mitre_results) > 1 else None
+    # A semantic/lexical result is evidence for triage, not an authority.  If
+    # it is weak or effectively tied with another technique, leave the source
+    # unresolved for review instead of emitting a confident-looking report.
+    if best_score < SEMANTIC_MIN_SCORE:
+        return None
+    if second_score is not None and best_score - second_score < SEMANTIC_MIN_MARGIN:
+        return None
+    return best
 
 
 def resolve_techniques(engine, row, finding_text):
     """Resolves ALL ATT&CK techniques relevant to one row.
 
     Priority order:
-    1. Any literal technique ID mentioned anywhere in the row (any column, or
-       the composed finding_text) -- trust an explicit label over a guess.
-       A single row CAN yield more than one technique this way (e.g. a CTI
-       excerpt or a Navigator export row that cites two IDs).
-    2. Otherwise, semantic-search finding_text and take the single
-       highest-scoring technique match (the original, unchanged behavior).
+    1. Literal technique IDs mentioned anywhere in the row -- authoritative.
+    2. Complete canonical ATT&CK technique names mentioned in the row -- also
+       deterministic, and may yield several TTPs from one CTI artifact.
+    3. Otherwise, semantic-search finding_text and take the single highest-
+       scoring technique match (the conservative fallback behavior).
 
-    Returns a list of (node_id, node_data, score) tuples -- usually length 1,
-    occasionally more, possibly empty.
+    Returns (node_id, node_data, score, resolution_method) tuples. A source
+    artifact can appear in several technique groups when it contains several
+    independently evidenced TTPs.
     """
-    row_text = " | ".join(str(v) for v in row.values if pd.notna(v))
+    row_text = " | ".join(
+        str(value) for column, value in row.items()
+        if not str(column).startswith('_') and pd.notna(value)
+    )
     direct_ids = extract_direct_technique_ids(engine, row_text)
-    if direct_ids:
-        return [(tid, engine.query_node(tid), 1.0) for tid in direct_ids]
+    named_ids = extract_named_techniques(engine, row_text)
+    resolved = []
+    for tid in direct_ids:
+        resolved.append((tid, engine.query_node(tid), 1.0, "explicit_attack_id"))
+    for tid in named_ids:
+        if tid not in direct_ids:
+            resolved.append((tid, engine.query_node(tid), 1.0, "canonical_attack_name"))
+    if resolved:
+        return resolved
 
     single = resolve_technique(engine, finding_text)
-    return [single] if single else []
+    return [(single[0], single[1], single[2], "semantic_fallback")] if single else []
 
 
 def group_findings_by_technique(engine, df):
@@ -128,6 +176,8 @@ def group_findings_by_technique(engine, df):
         ip = first_present(row, ['IP', 'Target Address', 'Address'], default="N/A")
         hostname = first_present(row, ['Hostname', 'Host', 'Target'], default="N/A")
         severity = first_present(row, ['Severity'], default="Unknown")
+        source_sheet = first_present(row, ['_sheet'], default="")
+        source_row = first_present(row, ['_source_row'], default=str(index + 1))
 
         mitre_nodes = resolve_techniques(engine, row, finding_text)
         if not mitre_nodes:
@@ -135,13 +185,14 @@ def group_findings_by_technique(engine, df):
             skipped_count += 1
             continue
 
-        for t_code, mitre_node_data, score in mitre_nodes:
+        for t_code, mitre_node_data, score, resolution_method in mitre_nodes:
             if t_code not in groups:
                 groups[t_code] = {
                     "technique_name": mitre_node_data.get('name', 'Unknown'),
                     "technique_description": mitre_node_data.get('description', 'Unknown'),
                     "affected_hosts": [],
                     "severity_breakdown": {},
+                    "requires_review": False,
                 }
 
             group = groups[t_code]
@@ -150,196 +201,114 @@ def group_findings_by_technique(engine, df):
                 "hostname": hostname,
                 "finding_text": finding_text,
                 "severity": severity,
+                "resolution_method": resolution_method,
+                "resolution_score": score,
+                "source_locator": {
+                    "sheet": source_sheet,
+                    "row": source_row,
+                    "dataframe_index": int(index) if isinstance(index, int) else str(index),
+                },
             })
+            if resolution_method == "semantic_fallback":
+                group["requires_review"] = True
             group["severity_breakdown"][severity] = group["severity_breakdown"].get(severity, 0) + 1
 
     print(f"Grouped findings into {len(groups)} unique technique(s); skipped {skipped_count} row(s) with no technique resolution.")
     return groups, skipped_count
 
 
-def crawl_correlation(engine, t_code):
-    """Runs the graph correlation crawl once for a given technique id.
+def collect_framework_mappings(engine, t_code):
+    """Collect every direct, graph-backed framework relationship for one TTP.
 
-    This is a direct extraction of agent_batch_processor.py's steps 1.5-6
-    (tactic resolution, D3FEND/analytics/mitigations collection, ZIG
-    activity/capability/pillar resolution, CREF approach/technique/
-    objective/goal/effect walk-up, CREF mitigation/NIST controls, and CSA
-    lookup) -- same graph queries, same fallback rules, unchanged.
+    The legacy markdown fields retain a primary relationship for readability,
+    but this structured result is intentionally exhaustive. It is written to
+    every report JSON so downstream systems can consume one-or-more ZIG,
+    CREF, NIST, and CSA mappings without scraping prose or losing secondary
+    relationships.
     """
-    mitre_node_data = engine.query_node(t_code) or {}
-    mitre_name = mitre_node_data.get('name', 'Unknown')
+    # This is intentionally a thin compatibility wrapper.  The authoritative
+    # implementation lives in GraphMappingService, which preserves multi-edges,
+    # returns all validated provenance paths, labels inherited parent mappings,
+    # and includes both native ATT&CK and CREF mitigations.  Do not add another
+    # first-hit graph crawl here.
+    return engine.get_framework_bundle(t_code)
 
-    # 1.5 Extract Tactic (belongs_to_tactic points at a TA-node; resolve its name)
-    mitre_tactic = "Unknown Tactic"
-    for u, v, data in engine.graph.out_edges(t_code, data=True):
-        if data.get('relationship') == 'belongs_to_tactic':
-            tactic_node = engine.query_node(v)
-            mitre_tactic = f"[{v}] {tactic_node.get('name', v)}" if tactic_node else v
-            break
 
-    # 2. Mitigation Crawl (D3FEND & Supplementals)
-    mitre_subgraph = engine.crawl_subgraph(t_code, depth=2)
-    d3fend_countermeasures = []
-    d3fend_artifacts = []
-    analytics = []
-    mitigations = []
+def crawl_correlation(engine, t_code):
+    """Build legacy display fields from the authoritative mapping service.
 
-    zig_activities_direct = []
-    cref_approaches = []
-    cref_mitigations = []
+    The former implementation performed a second, first-hit graph walk and
+    used unvalidated keyword fallbacks when a direct crosswalk was absent.
+    That was both lossy under ``MultiDiGraph`` and capable of presenting a
+    guessed ZIG mapping as fact.  This adapter intentionally derives every
+    scalar display field from the full validated bundle; the bundle itself is
+    retained unchanged for JSON/API consumers.
+    """
+    bundle = collect_framework_mappings(engine, t_code)
+    node = engine.query_node(t_code) or {}
 
-    if mitre_subgraph and 'nodes' in mitre_subgraph:
-        for nid, ndata in mitre_subgraph['nodes'].items():
-            ntype = ndata.get('type')
-            if ntype == 'd3fend_technique':
-                d3fend_countermeasures.append(f"[{nid}] {ndata.get('name', nid)}")
-            elif ntype in ('defensive_artifact', 'attack_datacomponent'):
-                d3fend_artifacts.append(f"[{nid}] {ndata.get('name', nid)}")
-            elif ntype == 'attack_analytic':
-                analytics.append(f"[{nid}] {ndata.get('description', ndata.get('name', 'Analytic'))[:120]}")
-            elif ntype == 'attack_mitigation':
-                mitigations.append(f"[{nid}] {ndata.get('name', 'Mitigation')}")
+    def label(item_id, name):
+        return f"[{item_id}] {name or item_id}" if item_id else "None found in graph"
 
-        # Direct ZIG-activity / CREF-approach / CREF-mitigation edges that target
-        # this technique (relationship_type 'mitigates' / 'mitigates_architecturally').
-        for edge in mitre_subgraph.get('edges', []):
-            if edge.get('target') != t_code:
-                continue
-            src_data = mitre_subgraph['nodes'].get(edge['source'], {})
-            src_type = src_data.get('type')
-            if src_type == 'zig_activity' and edge.get('relationship') == 'mitigates':
-                zig_activities_direct.append((edge['source'], src_data))
-            elif src_type == 'cref_approach' and edge.get('relationship') == 'mitigates_architecturally':
-                cref_approaches.append((edge['source'], src_data))
-            elif src_type == 'cref_mitigation' and edge.get('relationship') == 'mitigates':
-                cref_mitigations.append((edge['source'], src_data))
+    def unique(values):
+        return list(dict.fromkeys(value for value in values if value))
 
-    # 3. Zero Trust (ZIG) Correlation
-    # Prefer the direct zig_activity -> attack_technique edge (sourced from the
-    # DoD Zero Trust Strategy activity-level crosswalk) over keyword matching.
-    zig_activity_id = zig_cap_id = "None found"
-    zig_activity_name = zig_cap_name = "No matching ZIG activity"
-    zig_techs = []
+    tactics = bundle.get("attack_tactics") or []
+    zig = bundle.get("zig") or []
+    cref = bundle.get("cref") or []
+    mitigations = bundle.get("mitigations") or []
+    csa = bundle.get("csa") or []
+    d3fend = bundle.get("d3fend") or []
+    analytics = bundle.get("analytics") or []
 
-    if zig_activities_direct:
-        zig_activity_id, zig_activity_data = zig_activities_direct[0]
-        zig_activity_name = zig_activity_data.get('name', zig_activity_id)
-        for u, v, data in engine.graph.out_edges(zig_activity_id, data=True):
-            if data.get('relationship') == 'belongs_to_capability':
-                cap_node = engine.query_node(v)
-                zig_cap_id, zig_cap_name = v, (cap_node.get('name', v) if cap_node else v)
-                break
-    else:
-        # Fallback: the ZT crosswalk doesn't cover every technique yet. Rank ZIG
-        # nodes against the top countermeasure NAME (not its "[ID] Name" string).
-        search_term = d3fend_countermeasures[0].split('] ', 1)[-1] if d3fend_countermeasures else "Access Control"
-        zig_ranked = engine.keyword_rank(search_term, top_k=100)
-        zig_caps = [(n, d) for n, d, s in zig_ranked if d.get('type') == 'zig_capability']
-        zig_techs = [(n, d) for n, d, s in zig_ranked if d.get('type') == 'zig_technology']
-
-        if not zig_caps:
-            fallback_ranked = engine.keyword_rank("access management authentication", top_k=100)
-            zig_caps = [(n, d) for n, d, s in fallback_ranked if d.get('type') == 'zig_capability']
-            if not zig_techs:
-                zig_techs = [(n, d) for n, d, s in fallback_ranked if d.get('type') == 'zig_technology']
-
-        if zig_caps:
-            zig_cap_id, zig_cap_name = zig_caps[0][0], zig_caps[0][1].get('name', 'Unknown')
-
-    # Resolve the capability's pillar from the graph instead of hardcoding it
-    zig_pillar = "Unknown Pillar"
-    if zig_cap_id != "None found":
-        for u, v, data in engine.graph.out_edges(zig_cap_id, data=True):
-            if data.get('relationship') == 'belongs_to_pillar':
-                pillar_node = engine.query_node(v)
-                zig_pillar = pillar_node.get('name', v) if pillar_node else v
-                break
-
-    # 4. CREF Architectural Resiliency: walk the first approach up
-    # Approach -> Technique -> Objective -> Goal, plus its Effect.
-    cref_goal = cref_objective = cref_technique_name = cref_approach_name = cref_effect = "None found in graph"
-    cref_approach_id = "None"
-    cref_technique_id_found = None
-    if cref_approaches:
-        cref_approach_id, cref_approach_data = cref_approaches[0]
-        cref_approach_name = cref_approach_data.get('name', cref_approach_id)
-        for u, v, data in engine.graph.out_edges(cref_approach_id, data=True):
-            rel = data.get('relationship')
-            if rel == 'realizes_technique':
-                cref_technique_id_found = v
-                tech_node = engine.query_node(v)
-                cref_technique_name = tech_node.get('name', v) if tech_node else v
-            elif rel == 'has_effect':
-                eff_node = engine.query_node(v)
-                cref_effect = eff_node.get('name', v) if eff_node else v
-        if cref_technique_id_found:
-            for u, v, data in engine.graph.out_edges(cref_technique_id_found, data=True):
-                rel = data.get('relationship')
-                if rel == 'achieves_objective':
-                    obj_node = engine.query_node(v)
-                    cref_objective = obj_node.get('name', v) if obj_node else v
-                    for _, gv, gdata in engine.graph.out_edges(v, data=True):
-                        if gdata.get('relationship') == 'serves_goal':
-                            goal_node = engine.query_node(gv)
-                            cref_goal = goal_node.get('name', gv) if goal_node else gv
-                            break
-
-    # 5. NIST SP 800-53 Compliance Mapping, from the first cref_mitigation found.
-    cref_mitigation_id = "None found in graph"
-    cref_mitigation_name = "No matching CREF/ATT&CK mitigation with a control mapping"
-    nist_controls = []
-    zig_activity_id_from_mitigation = None
-    if cref_mitigations:
-        cref_mitigation_id, cm_data = cref_mitigations[0]
-        cref_mitigation_name = cm_data.get('name', cref_mitigation_id)
-        for u, v, data in engine.graph.out_edges(cref_mitigation_id, data=True):
-            rel = data.get('relationship')
-            if rel == 'satisfies_control':
-                nist_controls.append(v)
-            elif rel == 'implements_activity':
-                zig_activity_id_from_mitigation = v
-    traceability = (
-        f"Implements CREF Approach {cref_approach_id} / ZIG Activity {zig_activity_id_from_mitigation or zig_activity_id}"
-        if cref_mitigations else
-        "N/A — no CREF/ATT&CK mitigation mapped to this technique"
-    )
-
-    # 6. Cyber Survivability Attribute (CSA) impact, from the resolved CREF technique.
-    csa_name = "None found in graph"
-    if cref_technique_id_found:
-        for u, v, data in engine.graph.in_edges(cref_technique_id_found, data=True):
-            if data.get('relationship') == 'associated_with_technique':
-                csa_node = engine.query_node(u)
-                if csa_node:
-                    csa_name = csa_node.get('name', u)
-                break
-
-    zig_technologies = [f"[{nid}] {ndata.get('name', nid)}" for nid, ndata in zig_techs]
+    primary_zig = zig[0] if zig else {}
+    primary_cref = cref[0] if cref else {}
+    primary_mitigation = mitigations[0] if mitigations else {}
 
     return {
-        "tactic": mitre_tactic,
-        "technique_description": mitre_node_data.get('description', 'Unknown'),
-        "d3fend_countermeasures": d3fend_countermeasures,
-        "d3fend_artifacts": d3fend_artifacts,
-        "mitre_analytics": analytics,
-        "mitre_mitigations": mitigations,
-        "zig_pillar": zig_pillar,
-        "zig_activity_id": zig_activity_id,
-        "zig_activity_name": zig_activity_name,
-        "zig_capability_id": zig_cap_id,
-        "zig_capability_name": zig_cap_name,
-        "zig_technologies": zig_technologies,
-        "cref_goal": cref_goal,
-        "cref_objective": cref_objective,
-        "cref_technique": cref_technique_name,
-        "cref_approach": cref_approach_name,
-        "cref_approach_id": cref_approach_id,
-        "cref_effect": cref_effect,
-        "cref_mitigation_id": cref_mitigation_id,
-        "cref_mitigation_name": cref_mitigation_name,
-        "nist_controls": nist_controls,
-        "traceability": traceability,
-        "csa_name": csa_name,
+        "tactic": ", ".join(
+            label(item.get("tactic_id"), item.get("tactic_name")) for item in tactics
+        ) or "Unknown Tactic",
+        "technique_description": node.get("description", "Unknown"),
+        "d3fend_countermeasures": unique(
+            label(item.get("d3fend_id"), item.get("d3fend_name")) for item in d3fend
+        ),
+        # Full D3FEND artifacts remain in the provenance paths.  There is no
+        # scalar summary field in the mapping matrix that can safely express
+        # all of them without falsely collapsing distinct paths.
+        "d3fend_artifacts": [],
+        "mitre_analytics": unique(
+            label(item.get("analytic_id"), item.get("analytic_description") or item.get("analytic_name"))
+            for item in analytics
+        ),
+        "mitre_mitigations": unique(
+            label(item.get("mitigation_id"), item.get("mitigation_name")) for item in mitigations
+        ),
+        "zig_pillar": primary_zig.get("pillar_name", "Unknown Pillar"),
+        "zig_activity_id": primary_zig.get("activity_id", "None found"),
+        "zig_activity_name": primary_zig.get("activity_name", "No matching ZIG activity"),
+        "zig_capability_id": primary_zig.get("capability_id", "None found"),
+        "zig_capability_name": primary_zig.get("capability_name", "No matching ZIG activity"),
+        "zig_technologies": [],
+        "cref_goal": primary_cref.get("goal_name", "None found in graph"),
+        "cref_objective": primary_cref.get("objective_name", "None found in graph"),
+        "cref_technique": primary_cref.get("technique_name", "None found in graph"),
+        "cref_approach": primary_cref.get("approach_name", "None found in graph"),
+        "cref_approach_id": primary_cref.get("approach_id", "None"),
+        "cref_effect": primary_cref.get("effect_name", "None found in graph"),
+        "cref_mitigation_id": primary_mitigation.get("mitigation_id", "None found in graph"),
+        "cref_mitigation_name": primary_mitigation.get("mitigation_name", "No matching CREF/ATT&CK mitigation with a control mapping"),
+        "nist_controls": unique(
+            control for mitigation in mitigations for control in mitigation.get("nist_800_53_controls", [])
+        ),
+        "traceability": (
+            f"Validated mapping matrix {bundle.get('mapping_matrix_version')} / "
+            f"graph snapshot {bundle.get('graph_snapshot_id')}"
+        ),
+        "csa_name": ", ".join(
+            label(item.get("csa_id"), item.get("csa_name")) for item in csa
+        ) or "None found in graph",
+        "framework_mappings": bundle,
     }
 
 

@@ -1,0 +1,45 @@
+{
+  "dataset_files": {
+    "cref": {
+      "edges": "cref_edges.csv",
+      "nodes": "cref_nodes.csv"
+    },
+    "mitre": {
+      "edges": "mitre_edges.csv",
+      "nodes": "mitre_nodes.csv"
+    },
+    "zig": {
+      "edges": "zig_edges.csv",
+      "nodes": "zig_nodes.csv"
+    }
+  },
+  "edge_csv_hashes": {
+    "cref": "134fcfb127b85a93de68edf84478080ffefb7a93ac7723fc3b3e062cf7873ad8",
+    "mitre": "9d0b90bf2deadf7f4aa98848eb3ce25ef00073736f436d50eb22502060ab3a8c",
+    "zig": "74f0b65a9bce2f01f032112c37a53fcf749cebfacfa2d17cb7d0c8d419e6427d"
+  },
+  "edge_identity": "sha256(dataset, source_file, source_record_index, source_id, target_id, relationship_type)",
+  "edge_row_count": 43387,
+  "edge_row_counts": {
+    "cref": 14105,
+    "mitre": 28860,
+    "zig": 422
+  },
+  "graph_schema_version": "2",
+  "graph_snapshot_id": "sha256:c80084453b6ec9823f23777705dcc6625b424a2e84d5c50950be4881315bb2e8",
+  "mapping_matrix_version": "1.0",
+  "multi_edge_preserving": true,
+  "node_count": 5618,
+  "node_csv_hashes": {
+    "cref": "f8a69647874a6294b8e6172f3b6b9f847b1e26cf374b6c4e010b43ebbe3b07ff",
+    "mitre": "7f466fd9e17328fdb122f4f847404f3823d8ac7bcbc130fb537b93968d9f4fac",
+    "zig": "07da3e4d98d9a2cf6827807e029240985f1edfa515480d514934348855dc5bc8"
+  },
+  "node_row_count": 5618,
+  "node_row_counts": {
+    "cref": 406,
+    "mitre": 4892,
+    "zig": 320
+  },
+  "runtime_edge_count": 43387
+}

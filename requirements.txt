@@ -5,6 +5,7 @@ pandas>=2.0
 # TIER 2 — REQUIRED only to regenerate datasets from the raw source files
 # (consolidate_mitre_data.py, ingest_assessment.py reading Excel/ODS).
 openpyxl>=3.1        # .xlsx reading
+xlrd>=2.0            # legacy .xls reading
 odfpy>=1.4           # .ods reading (ATT&CK_D3FEND_Mappings.ods)
 
 # TIER 3 — OPTIONAL. Enables semantic (vector) search. If these cannot be

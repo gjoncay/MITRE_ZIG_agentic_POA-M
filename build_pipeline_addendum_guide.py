@@ -28,6 +28,8 @@ OUT_NAME = "ANALYST_PIPELINE_ADDENDUM_GUIDE.md"
 # Every file this addendum touches, new or modified, in the order a coding
 # agent should write/overwrite them.
 EMBEDDED_FILES = [
+    ("scripts/ingest_assessment.py", "python"),
+    ("scripts/llm_graph_tools.py", "python"),
     ("scripts/llm_providers.py", "python"),
     ("scripts/consolidate_findings.py", "python"),
     ("scripts/report_schema.py", "python"),
@@ -49,7 +51,9 @@ def count_csv(path):
 def graph_counts():
     """Deduplicated counts as the engine will actually report them."""
     import networkx as nx
-    g = nx.DiGraph()
+    # Match the provenance-preserving runtime graph: parallel CSV relations
+    # are distinct evidence, not duplicates to be collapsed by DiGraph.
+    g = nx.MultiDiGraph()
     for nodes_file, edges_file in [("mitre_nodes.csv", "mitre_edges.csv"),
                                    ("zig_nodes.csv", "zig_edges.csv"),
                                    ("cref_nodes.csv", "cref_edges.csv")]:
@@ -196,7 +200,10 @@ different problems:
    gets a machine-readable JSON twin (`scripts/report_schema.py`) and an automated
    QA pass that force-flags any report containing a bracketed framework ID that
    doesn't resolve to a real graph node — a deterministic hallucination safety net
-   that runs regardless of which provider drafted the text.
+   that runs regardless of which provider drafted the text. Provider-assisted
+   mapping uses the separately embedded `llm_graph_tools.py` session: only
+   bounded, read-only graph actions with opaque handles are exposed; the model
+   cannot issue filesystem or arbitrary graph queries.
 
 **Every report this pipeline generates gets all three layers (tactical MITRE/D3FEND/
 ZIG, architectural CREF, compliance NIST/CSA) plus a QA verdict — there is no
@@ -334,11 +341,10 @@ python3 run_analyst_pipeline.py --input processed_assessment.csv --output-dir re
 Expected console output (heuristic mode):
 
 ```text
-Initializing Knowledge Graph Engine (loading vectors)...
-Grouped findings into N unique technique(s); skipped K row(s) with no technique resolution.
-Skipped K row(s) with no technique resolution.
+Initializing Knowledge Graph Engine (...)
+... progress events for normalized observations, candidates, and reports ...
 Using provider: HeuristicFallbackProvider
-Generated CONSOL-<T-code>: <finding_count> findings consolidated, QA=PASS
+Generated CONSOL-<T-code>: <finding_count> findings consolidated, QA=MANUAL_REVIEW_REQUIRED
 ```
 
 (repeated once per technique group). Reports land in `--output-dir` (default
@@ -359,7 +365,9 @@ ls reports/
 ```
 
 Expected: exit code `0`, and `reports/` contains one `.md` + `.json` pair per
-technique group. Because this network has no route to the internet at all, a
+technique group. In heuristic mode, the resulting reports deliberately require
+human review; a completed CLI process is not a claim that every report passed.
+Because this network has no route to the internet at all, a
 completed run in normal runtime (no multi-minute hang followed by a timeout
 traceback) is itself evidence that no network call was attempted — heuristic
 mode's `HeuristicFallbackProvider` never imports `openai` or
@@ -395,7 +403,7 @@ python3 -c "
 import json
 d = json.load(open('reports/<REPORT_ID>.json'))       # substitute an actual generated report id
 assert d['technique_id'] and d['report_id'] and d['generated_date']
-assert d['qa_verdict'] in ('PASS', 'FLAG')
+assert d['qa_verdict'] in ('PASS', 'FLAG', 'MANUAL_REVIEW_REQUIRED')
 assert isinstance(d['affected_hosts'], list) and len(d['affected_hosts']) == d['finding_count']
 print('JSON OK:', d['technique_id'], d['qa_verdict'], d['finding_count'], 'hosts')
 "

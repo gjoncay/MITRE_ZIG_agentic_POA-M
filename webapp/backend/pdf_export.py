@@ -20,6 +20,8 @@ renderer.
 from __future__ import annotations
 
 import os
+import re
+from html import escape as html_escape
 
 import markdown as _markdown
 from weasyprint import HTML
@@ -171,6 +173,37 @@ HTML_TEMPLATE = """<!doctype html>
 </html>"""
 
 
+def _disable_raw_html(markdown_text: str) -> str:
+    """Render raw HTML from reports as text, not executable/rendered markup.
+
+    Findings and LLM prose are untrusted. Python-Markdown intentionally
+    preserves raw HTML, which is inappropriate before WeasyPrint receives the
+    resulting document. Markdown syntax remains available; only tag-looking
+    sequences are neutralized.
+    """
+    return re.sub(r"<(?=[!/A-Za-z])", "&lt;", markdown_text).replace(">", "&gt;")
+
+
+def _local_only_url_fetcher(url: str, *args, **kwargs):
+    """Reports are self-contained; deny remote/file resource fetches in PDF rendering."""
+    if url.startswith("data:"):
+        # No current report assets use data URLs, but they are safe to support
+        # if a future renderer embeds a local image deliberately.
+        from weasyprint.urls import default_url_fetcher
+        return default_url_fetcher(url, *args, **kwargs)
+    raise ValueError(f"External resource fetching is disabled for report PDFs: {url}")
+
+
+def render_markdown_pdf(markdown_text: str, *, title: str = "MITRE CSD-H Report") -> bytes:
+    """Render immutable run-scoped Markdown without a legacy reports path."""
+    body_html = _markdown.markdown(
+        _disable_raw_html(markdown_text),
+        extensions=["tables", "fenced_code"],
+    )
+    full_html = HTML_TEMPLATE.format(title=html_escape(title, quote=True), style=REPORT_STYLE, body=body_html)
+    return HTML(string=full_html, url_fetcher=_local_only_url_fetcher).write_pdf()
+
+
 def render_report_pdf(report_id: str, reports_dir: str) -> bytes:
     """Render ``{reports_dir}/{report_id}.md`` to PDF bytes.
 
@@ -186,15 +219,4 @@ def render_report_pdf(report_id: str, reports_dir: str) -> bytes:
     with open(md_path, "r", encoding="utf-8") as f:
         md_text = f.read()
 
-    body_html = _markdown.markdown(
-        md_text,
-        extensions=["tables", "fenced_code"],
-    )
-
-    full_html = HTML_TEMPLATE.format(
-        title=report_id,
-        style=REPORT_STYLE,
-        body=body_html,
-    )
-
-    return HTML(string=full_html).write_pdf()
+    return render_markdown_pdf(md_text, title=report_id)

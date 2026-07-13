@@ -1,41 +1,69 @@
 # MITRE CSD-H web UI + Tailscale sidecar (per-app URL).
-# Full recipe & gotchas: ./TAILSCALE_SIDECAR.md
 #
-# Reachable only at https://mitre-csdh.dikdik-macaroni.ts.net (tailnet-only).
-# Start: `cp .env.example .env` + paste TS_AUTHKEY (and optionally LLM_PROVIDER /
-# API keys), then `docker compose up -d`.
-#
-# NOTE: this Docker/Tailscale/web-UI layer is entirely separate from the
-# air-gapped CLI/backend pipeline (see Air_Gapped_Deployment_Guide.md) — it is
-# NOT part of that port and is not required to use the graph engine offline.
+# This compose stack is intentionally separate from the air-gapped CLI path.
+# Read WEB_DEPLOYMENT_OPERATIONS.md before first use: ./data contains evidence,
+# SQLite/WAL state, immutable report assets, and soft-delete trash.
 
 name: mitre-csdh
 
 services:
-  # ---- the app: FastAPI backend serving the built React frontend ----
+  # ---- FastAPI backend serving the compiled React frontend ----
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
-    # No `ports:` — Tailscale is the only ingress (stays off the LAN).
-    # Lets the container reach a locally-hosted LLM (e.g. Ollama) running on the
-    # HOST machine at 127.0.0.1 — "localhost" inside the container means the
-    # container itself, not the host, so LOCAL_LLM_BASE_URL should point at
-    # http://host.docker.internal:<port> instead. Ollama also needs OLLAMA_HOST=
-    # 0.0.0.0 host-side (see TAILSCALE_SIDECAR.md's sibling note in README.md) —
-    # it defaults to 127.0.0.1-only, which this container can't reach either way.
+    init: true
+    # Map the process to the owner of ./data on Linux.  Set APP_UID/APP_GID in
+    # .env from `id -u` / `id -g`; the image still defaults to its dedicated
+    # non-root appuser when it is run outside Compose.
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:mode=1777,size=256m
+    # No `ports:` — the Tailscale sidecar is the only ingress.  A locally
+    # hosted OpenAI-compatible LLM must be reachable at host.docker.internal,
+    # never at the container's own localhost.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      - HOME=/tmp
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
       - LLM_PROVIDER=${LLM_PROVIDER:-none}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-1.5-flash}
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
-      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-llama3.1}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
+      - LLM_REQUEST_TIMEOUT_SECONDS=${LLM_REQUEST_TIMEOUT_SECONDS:-90}
+      - LLM_GRAPH_TOOL_CRAWL=${LLM_GRAPH_TOOL_CRAWL:-enabled}
+      - LLM_GRAPH_TOOL_MAX_CALLS=${LLM_GRAPH_TOOL_MAX_CALLS:-6}
+      # Keep every mutable web artifact in the single private bind mount.
+      - CSDH_DATA_DIR=/app/data
+      - CSDH_DB_PATH=/app/data/csdh.sqlite3
+      - CSDH_MAX_UPLOAD_BYTES=${CSDH_MAX_UPLOAD_BYTES:-26214400}
+      - CSDH_MAX_TEXT_CHARACTERS=${CSDH_MAX_TEXT_CHARACTERS:-2000000}
+      - CSDH_WORKER_CONCURRENCY=${CSDH_WORKER_CONCURRENCY:-1}
+      - CSDH_DELETE_RETENTION_HOURS=${CSDH_DELETE_RETENTION_HOURS:-720}
+      # Authentication is mandatory in production. Token mode is the default;
+      # trusted_proxy is permitted only when a proxy strips/spoofs neither
+      # header and injects identity after authenticating the request.
+      - CSDH_AUTH_MODE=${CSDH_AUTH_MODE:-token}
+      - CSDH_AUTH_TOKENS_JSON=${CSDH_AUTH_TOKENS_JSON:-}
+      - CSDH_TRUSTED_PROXY_USER_HEADER=${CSDH_TRUSTED_PROXY_USER_HEADER:-X-CSDH-Authenticated-User}
+      - CSDH_SESSION_COOKIE_SECURE=${CSDH_SESSION_COOKIE_SECURE:-true}
     volumes:
-      # Bind mounts (not named volumes) so reports/uploads are visible on the
-      # host filesystem and inspectable with a normal text editor.
-      - ./reports:/app/reports
-      - ./webapp/backend/uploads:/app/webapp/backend/uploads
+      # Create this directory with mode 0700 and host-user ownership before
+      # starting Compose.  Do not mount the repository's legacy reports/ or
+      # uploads/ directories: the durable backend writes only below data/runs.
+      - ./data:/app/data:rw
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status == 200 else 1)"]
       interval: 30s
@@ -43,14 +71,16 @@ services:
       retries: 3
       start_period: 20s
 
-  # ---- Tailscale sidecar: https://mitre-csdh.dikdik-macaroni.ts.net ----
+  # ---- Tailscale sidecar: tailnet-only HTTPS ingress ----
   app-ts:
-    image: tailscale/tailscale:latest
+    # A version tag is intentional rather than `latest`; production operators
+    # should replace TAILSCALE_IMAGE with a reviewed image digest.
+    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:v1.98}
     restart: unless-stopped
-    network_mode: service:app             # shares app's netns -> proxy 127.0.0.1:8000
+    network_mode: service:app             # shared netns -> proxy 127.0.0.1:8000
     environment:
       - TS_AUTHKEY=${TS_AUTHKEY:?set TS_AUTHKEY in .env (see ./TAILSCALE_SIDECAR.md)}
-      - TS_HOSTNAME=mitre-csdh              # becomes the URL subdomain
+      - TS_HOSTNAME=mitre-csdh
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=true
       - TS_SERVE_CONFIG=/config/mitre-csdh.json

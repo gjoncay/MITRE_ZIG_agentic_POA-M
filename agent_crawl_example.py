@@ -1,3 +1,11 @@
+"""LEGACY graph-crawl demonstration.
+
+This is a read-only educational example, not the supported analyst workflow.
+Use the bounded graph tools exposed through ``run_analyst_pipeline.py`` or the
+web API for production work.  It deliberately uses canonical repository edge
+fields so it remains safe with the relation-preserving MultiDiGraph.
+"""
+
 import sys
 import os
 
@@ -13,10 +21,14 @@ def format_subgraph(subgraph_data):
         out += f"  - [{nid}] {ndata.get('name', '')} ({ndata.get('type', '')})\n"
     out += "Edges:\n"
     for edge in subgraph_data['edges']:
-        out += f"  - {edge['source']} --({edge['relationship']})--> {edge['target']}\n"
+        out += (
+            f"  - {edge['source_id']} --({edge['relationship_type']})--> "
+            f"{edge['target_id']}\n"
+        )
     return out
 
 if __name__ == "__main__":
+    print("LEGACY EXAMPLE: this script does not create reviewable reports.")
     engine = KnowledgeGraphEngine()
     
     print("\n" + "="*50)
@@ -58,20 +70,21 @@ if __name__ == "__main__":
     # 'mitigates_architecturally', no keyword matching required.
     if mitre_results:
         for edge in mitre_subgraph.get('edges', []):
-            if edge['target'] != mitre_node_id:
+            if edge['target_id'] != mitre_node_id:
                 continue
-            src_data = mitre_subgraph['nodes'].get(edge['source'], {})
+            source_id = edge['source_id']
+            src_data = mitre_subgraph['nodes'].get(source_id, {})
             src_type = src_data.get('type')
             if src_type == 'zig_activity':
-                print(f"  - Direct ZIG Activity: [{edge['source']}] {src_data.get('name')} --mitigates--> {mitre_node_id}")
+                print(f"  - Direct ZIG Activity: [{source_id}] {src_data.get('name')} --mitigates--> {mitre_node_id}")
             elif src_type == 'cref_approach':
-                print(f"  - CREF Approach: [{edge['source']}] {src_data.get('name')} --mitigates_architecturally--> {mitre_node_id}")
+                print(f"  - CREF Approach: [{source_id}] {src_data.get('name')} --mitigates_architecturally--> {mitre_node_id}")
             elif src_type == 'cref_mitigation':
-                print(f"  - CREF/NIST Mitigation: [{edge['source']}] {src_data.get('name')} --mitigates--> {mitre_node_id}")
-                for _, v, data in engine.graph.out_edges(edge['source'], data=True):
-                    if data.get('relationship') == 'satisfies_control':
-                        control_node = engine.query_node(v)
-                        print(f"      satisfies_control --> [{v}] (NIST SP 800-53)")
+                print(f"  - CREF/NIST Mitigation: [{source_id}] {src_data.get('name')} --mitigates--> {mitre_node_id}")
+                for control_edge in engine.repository.outgoing(source_id, 'satisfies_control'):
+                    control_id = control_edge['target_id']
+                    control_node = engine.query_node(control_id)
+                    print(f"      satisfies_control --> [{control_id}] (NIST SP 800-53)")
 
     print("\n" + "="*50)
     print("FINAL ASSESSMENT OUTPUT (MARKDOWN TEMPLATE FORMAT)")

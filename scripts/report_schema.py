@@ -83,6 +83,7 @@ module never calls datetime.now() or any graph/QA code itself):
 
 import os
 import re
+import html
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_PATH = os.path.join(BASE_DIR, "assessment_template_consolidated.md")
@@ -116,6 +117,10 @@ def build_report_json(t_code, context, narrative, qa_result):
         "severity_breakdown": context.get("severity_breakdown", {}),
         "affected_hosts": affected_hosts,  # full list, not capped
         "is_hostless": _is_hostless(affected_hosts),  # True for CTI/adversary narrative input, no real asset data
+        # Exhaustive, deterministic graph relationships. Markdown presents a
+        # concise primary view; this preserves every one-to-many framework
+        # mapping for APIs, exports, and downstream analysis.
+        "framework_mappings": context.get("framework_mappings", {}),
 
         # D3FEND
         "d3fend_countermeasure_1": context.get("d3fend_countermeasure_1"),
@@ -212,7 +217,10 @@ def _build_affected_hosts_table(context):
         lines = ["| Source Excerpt | Severity |", "|---|---|"]
         excerpt_to_severity = {h.get("finding", "N/A"): h.get("severity", "N/A") for h in affected_hosts}
         for excerpt in displayed:
-            lines.append(f"| {excerpt} | {excerpt_to_severity.get(excerpt, 'N/A')} |")
+            lines.append(
+                f"| {_escape_table_cell(excerpt)} | "
+                f"{_escape_table_cell(excerpt_to_severity.get(excerpt, 'N/A'))} |"
+            )
 
         if len(seen) > len(displayed):
             remaining = len(seen) - len(displayed)
@@ -227,10 +235,10 @@ def _build_affected_hosts_table(context):
     for host in displayed:
         lines.append(
             "| {ip} | {hostname} | {finding} | {severity} |".format(
-                ip=host.get("ip", "N/A"),
-                hostname=host.get("hostname", "N/A"),
-                finding=host.get("finding", "N/A"),
-                severity=host.get("severity", "N/A"),
+                ip=_escape_table_cell(host.get("ip", "N/A")),
+                hostname=_escape_table_cell(host.get("hostname", "N/A")),
+                finding=_escape_table_cell(host.get("finding", "N/A")),
+                severity=_escape_table_cell(host.get("severity", "N/A")),
             )
         )
 
@@ -242,6 +250,17 @@ def _build_affected_hosts_table(context):
         )
 
     return "\n".join(lines)
+
+
+def _escape_table_cell(value):
+    """Make untrusted artifact text safe inside a Markdown table cell.
+
+    Python-Markdown passes raw HTML through to the PDF renderer. Escaping here
+    protects the common high-risk path (finding, host, severity, and source
+    excerpt) and also prevents an embedded pipe from changing table shape.
+    """
+    text = html.escape(str(value if value is not None else "N/A"), quote=False)
+    return text.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
 
 
 def _build_severity_breakdown_str(context):
